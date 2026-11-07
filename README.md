@@ -3,7 +3,7 @@
 Weekly shift scheduling for a customer service department. The system reads the
 week's data from Excel, minimizes understaffing first and cost second, repairs the
 schedule after an absence, and lets the manager work in plain language through an
-existing MCP chat client. All calculation and validation run in Python on the server;
+existing MCP chat client. All calculation and validation run in Python on the server.
 the language model only understands requests and presents results.
 
 Final project, B.Sc. Computer Science, Bar-Ilan University.
