@@ -10,17 +10,17 @@ from shiftopt.ingest.excel_reader import ImportResult, InputIssue, read_input
 
 @dataclass
 class ImportOutcome:
-    status: str  # "OK" or "INPUT_INVALID"
+    status: str  # "OK" or "INVALID_INPUT"
     input_version: str | None
     errors: list[InputIssue] = field(default_factory=list)
 
 
 def import_workbook(store: Store, path: str | Path) -> ImportOutcome:
-    """Read, validate and store a workbook. On INPUT_INVALID nothing is stored and
+    """Read, validate and store a workbook. On INVALID_INPUT nothing is stored and
     the previously active input version stays active (SCRUM-21)."""
     res = read_input(path)
     if not res.ok:
-        return ImportOutcome("INPUT_INVALID", None, res.errors)
+        return ImportOutcome("INVALID_INPUT", None, res.errors)
     return ImportOutcome("OK", store.save_input_version(res.data), [])
 
 
