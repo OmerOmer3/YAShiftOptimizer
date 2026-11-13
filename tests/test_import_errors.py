@@ -12,7 +12,7 @@ from shiftopt.ingest import read_input
 
 def _codes(path):
     r = read_input(path)
-    assert r.status == "INPUT_INVALID"
+    assert r.status == "INVALID_INPUT"
     return {(e.sheet, e.row, e.column, e.code) for e in r.errors}, r
 
 

@@ -57,4 +57,4 @@ CI runs the same command on every push (`.github/workflows/ci.yml`).
 - Coverage is per 30-minute slot; hourly demand applies to both halves of the hour.
 - Day of week: 1 Sunday ... 6 Friday.
 - Errors are reported, never silently dropped. Valid input with no possible schedule is
-  `INFEASIBLE`, not `INPUT_INVALID`.
+  `INFEASIBLE`, not `INVALID_INPUT`.

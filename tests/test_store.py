@@ -11,7 +11,7 @@ def test_invalid_input_keeps_previous_version(tmp_path, small_input, mutate):
 
     bad_path = mutate(lambda wb: wb["Employees"].__setitem__("A5", "E003"))  # duplicate ID
     bad = import_workbook(store, bad_path)
-    assert bad.status == "INPUT_INVALID"
+    assert bad.status == "INVALID_INPUT"
     assert bad.input_version is None
     assert bad.errors[0].sheet == "Employees" and bad.errors[0].row == 5
     assert store.active_input_version() == ok.input_version

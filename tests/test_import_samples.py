@@ -25,7 +25,7 @@ def test_large_input(large_input):
 
 
 def test_infeasible_input_is_valid_input(infeasible_input):
-    """Spec section 6: only three active days is INFEASIBLE, not INPUT_INVALID."""
+    """Spec section 6: only three active days is INFEASIBLE, not INVALID_INPUT."""
     r = read_input(infeasible_input)
     assert r.ok, [str(e) for e in r.errors]
     active_days = {d for (d, _) in r.data.demand}

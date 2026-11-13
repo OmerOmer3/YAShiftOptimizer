@@ -1,7 +1,7 @@
 """Excel input import and validation (SCRUM-18, SCRUM-19, SCRUM-20).
 
 Reads an input workbook in schema 1.0 and either returns a fully typed InputData,
-or status INPUT_INVALID with every problem found, each with sheet, Excel row
+or status INVALID_INPUT with every problem found, each with sheet, Excel row
 number, column and a readable reason (spec section 6, "input checks").
 
 Infeasibility is NOT checked here: valid input with no possible schedule
@@ -70,7 +70,7 @@ class InputIssue:
 
 @dataclass
 class ImportResult:
-    status: str  # "OK" or "INPUT_INVALID"
+    status: str  # "OK" or "INVALID_INPUT"
     data: InputData | None = None
     errors: list[InputIssue] = field(default_factory=list)
 
@@ -199,7 +199,7 @@ def read_input(path: str | Path) -> ImportResult:
     try:
         wb = openpyxl.load_workbook(path, data_only=False)
     except Exception as e:  # not a readable xlsx
-        return ImportResult("INPUT_INVALID", errors=[InputIssue("(file)", None, None, f"cannot open workbook: {e}", "UNREADABLE")])
+        return ImportResult("INVALID_INPUT", errors=[InputIssue("(file)", None, None, f"cannot open workbook: {e}", "UNREADABLE")])
 
     sheets: dict[str, _Sheet] = {}
     for name in REQUIRED_COLUMNS:
@@ -216,7 +216,7 @@ def read_input(path: str | Path) -> ImportResult:
     break_rules = _read_break_rules(sheets.get("BreakRules"), col)
 
     if col.errors:
-        return ImportResult("INPUT_INVALID", errors=col.errors)
+        return ImportResult("INVALID_INPUT", errors=col.errors)
     data = InputData(schema_version, week_start, employees, demand, templates, break_rules, source_file=path.name)
     return ImportResult("OK", data=data)
 

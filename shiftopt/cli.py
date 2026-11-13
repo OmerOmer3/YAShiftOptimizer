@@ -20,7 +20,7 @@ from shiftopt.validator import validate
 def _cmd_import(a) -> int:
     out = import_workbook(Store(a.db), a.file)
     if out.status != "OK":
-        print("INPUT_INVALID")
+        print("INVALID_INPUT")
         for e in out.errors:
             print(f"  {e}")
         return 2
@@ -31,7 +31,7 @@ def _cmd_import(a) -> int:
 def _cmd_validate(a) -> int:
     res = read_input(a.input)
     if not res.ok:
-        print("INPUT_INVALID")
+        print("INVALID_INPUT")
         for e in res.errors:
             print(f"  {e}")
         return 2
