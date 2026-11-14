@@ -143,6 +143,36 @@ def test_week_start_must_be_sunday(mutate):
     assert ("Settings", 2, "WeekStart", "WEEKSTART_NOT_SUNDAY") in codes
 
 
+def test_invalid_week_start_still_reports_demand_dates_in_another_week(mutate):
+    """SCRUM-78: a wrong WeekStart must not hide the other date errors."""
+    def f(wb):
+        wb["Settings"]["B2"] = dt.datetime(2026, 11, 2)  # Monday
+        wb["Demand"]["A5"] = dt.datetime(2027, 1, 4)     # a Monday two months later
+    codes, r = _codes(mutate(f))
+    assert ("Settings", 2, "WeekStart", "WEEKSTART_NOT_SUNDAY") in codes
+    assert ("Demand", 5, "Date", "DATES_NOT_ONE_WEEK") in codes
+    week_rows = [e.row for e in r.errors if e.code == "DATES_NOT_ONE_WEEK"]
+    assert week_rows == [5]  # only the stray row, not the 57 rows of the real week
+
+
+def test_invalid_week_start_still_reports_saturday(mutate):
+    def f(wb):
+        wb["Settings"]["B2"] = "not a date"
+        wb["Demand"]["A2"] = dt.datetime(2026, 11, 7)  # Saturday
+    codes, _ = _codes(mutate(f))
+    assert ("Settings", 2, "WeekStart", "WRONG_TYPE") in codes
+    assert ("Demand", 2, "Date", "DATE_NOT_SUNDAY_TO_FRIDAY") in codes
+
+
+def test_valid_week_start_uses_the_week_check_only(mutate):
+    """With a valid WeekStart the existing check applies and the new codes never appear."""
+    def f(wb):
+        wb["Demand"]["A5"] = dt.datetime(2027, 1, 4)
+    codes, _ = _codes(mutate(f))
+    assert ("Demand", 5, "Date", "DATE_OUT_OF_WEEK") in codes
+    assert not {c for c in codes if c[3] in ("DATES_NOT_ONE_WEEK", "DATE_NOT_SUNDAY_TO_FRIDAY")}
+
+
 def test_schema_version(mutate):
     def f(wb):
         wb["Settings"]["A2"] = "2.0"
