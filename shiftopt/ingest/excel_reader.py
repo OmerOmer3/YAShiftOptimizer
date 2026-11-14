@@ -11,6 +11,7 @@ engine as INFEASIBLE (spec section 6, last paragraph).
 from __future__ import annotations
 
 import datetime as dt
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -270,12 +271,49 @@ def _read_employees(sh: _Sheet | None, c: _Collector) -> dict[str, Employee]:
     return out
 
 
+def _check_demand_dates_without_week(sh: _Sheet, c: _Collector) -> None:
+    """Date checks that hold whatever WeekStart says (SCRUM-78, decided 14.11.2026).
+
+    When WeekStart is missing or invalid, the dates cannot be compared with it, but two
+    rules still apply and are reported in the same pass: every Demand date is a Sunday to
+    Friday, and all Demand dates fall in one Sunday-to-Friday week. The week most rows
+    belong to is taken as the reference (the earliest on a tie), so one stray row is the
+    one reported, not all the others.
+    """
+    dates = []
+    for r, v in sh.rows:
+        if v.get("Date") is None:
+            continue
+        try:
+            dates.append((r, _as_date(v.get("Date"))))
+        except _TypeErr:
+            continue  # the type error is reported by the main pass
+    for r, d in dates:
+        if day_of_week(d) == 7:
+            c.add("Demand", r, "Date", f"{d.isoformat()} is a Saturday; planning days are Sunday to Friday",
+                  "DATE_NOT_SUNDAY_TO_FRIDAY")
+
+    def sunday(d):  # the Sunday that starts d's week (d is Sunday..Friday here)
+        return d - dt.timedelta(days=day_of_week(d) - 1)
+
+    weeks = Counter(sunday(d) for _, d in dates if day_of_week(d) != 7)
+    if len(weeks) <= 1:
+        return
+    ref = min(weeks, key=lambda w: (-weeks[w], w))
+    for r, d in dates:
+        if day_of_week(d) != 7 and sunday(d) != ref:
+            c.add("Demand", r, "Date", f"{d.isoformat()} is not in the same Sunday-Friday week as the other "
+                                       f"Demand dates (week starting {ref.isoformat()})", "DATES_NOT_ONE_WEEK")
+
+
 def _read_demand(sh: _Sheet | None, c: _Collector, week_start) -> dict:
     out: dict = {}
     if sh is None or not sh.ok:
         return out
     week = {week_start + dt.timedelta(days=i) for i in range(6)} if week_start else None
     seen: dict = {}
+    if week is None:
+        _check_demand_dates_without_week(sh, c)
     for r, v in sh.rows:
         d = c.get("Demand", r, v, "Date", _as_date)
         h = c.get("Demand", r, v, "HourStart", _as_time_minutes)
