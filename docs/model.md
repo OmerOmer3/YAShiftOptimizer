@@ -96,13 +96,39 @@ Machine: 2 x Intel Xeon @ 2.10 GHz (container), OR-Tools 9.15.6755, 2 workers, s
 | Input_Infeasible | 10 s | INFEASIBLE | - | - | - | infeasibility in 0.01 s |
 
 The course sample for Input_Small_10 costs 11,540 and is not claimed optimal; the engine
-proves 11,510 optimal. The full experiment report with the greedy baseline is sprint 5.
+proves 11,510 optimal.
+
+### Input_Large_50 on our own computers (14.11.2026)
+
+Both machines: Windows 11, 12 logical CPUs, OR-Tools 9.15.6755, seed 0.
+
+| Machine | Workers | Budget | Status | Cost | Cost proven | First feasible | Total |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Omer | 2 | 60 s | FEASIBLE | 57,900 | no | 2.43 s | 60.08 s |
+| Omer | 4 | 60 s | FEASIBLE | 57,925 | no | 2.33 s | 60.16 s |
+| Omer | 8 | 60 s | FEASIBLE | 57,975 | no | 2.49 s | 60.42 s |
+| Omer | 8 | 120 s | OPTIMAL | 57,900 | yes | 3.14 s | 75.80 s |
+| Ofri | 2 | 60 s | FEASIBLE | 57,900 | no | 4.64 s | 60.05 s |
+| Ofri | 4 | 60 s | FEASIBLE | 57,900 | no | 3.56 s | 60.10 s |
+| Ofri | 8 | 60 s | OPTIMAL | 57,900 | yes | 2.06 s | 42.32 s |
+| Ofri | 8 | 120 s | OPTIMAL | 57,900 | yes | 2.89 s | 39.60 s |
+
+The shortage was 24 half-hours and proven optimal in every run. **57,900 is the optimal
+cost of Input_Large_50**, proven three times on two machines, always with 8 workers. The
+proof took about 40 s on one machine and about 76 s on the other under the same settings,
+so parallel search time varies between machines and runs. With 2 or 4 workers the optimal
+cost is usually found within 60 s but not proven. "Total" includes the independent check
+after the solver stops, so it can exceed the budget by a fraction of a second.
+
+The full experiment report with the greedy baseline and several seeds per setting is
+sprint 5 (Jira SCRUM-46).
 
 ## 7. Open points
 
-* Cost is not proven on Input_Large_50 within 60 s on 2 workers. To try: more workers on
-  the evaluation machine, and symmetry breaking between employees with the same
-  unavailable days.
+* Proving the cost optimum on Input_Large_50 takes about 40-76 s with 8 workers on our
+  machines, so a 60 s budget may end FEASIBLE. Keep 8 workers as the default. Symmetry
+  breaking between employees with the same unavailable days was tried and did not help
+  (Jira SCRUM-82).
 * Repair (sprint 4) reuses this model: past and locked shifts become fixed variables, a
   stage minimizing changed (employee, date) pairs is inserted between coverage and cost,
   and the absent employee is passed in `min_shifts_exempt`.
