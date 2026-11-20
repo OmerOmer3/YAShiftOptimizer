@@ -45,7 +45,7 @@ def solved(store, small_input):
 
 def test_tools_are_listed_with_descriptions_and_schemas(store, tmp_path):
     tools = {t.name: t for t in list_tools(build_server(store, export_dir=tmp_path))}
-    assert {"get_system_status", "export_schedule"} <= tools.keys()
+    assert {"get_system_status", "export_schedule", "resolve_reference"} <= tools.keys()
     for t in tools.values():
         assert t.description and len(t.description) > 20, t.name
         assert t.input_schema["type"] == "object"
@@ -103,6 +103,6 @@ def test_unknown_run_is_a_structured_not_found(store, solved, tmp_path):
 
 def test_malformed_parameters_are_rejected_before_the_tool_runs(store, tmp_path):
     srv = build_server(store, export_dir=tmp_path)
-    assert call(srv, "export_schedule", {}).is_error                 # missing ref
+    assert call(srv, "export_schedule", {"file_name": 5}).is_error   # wrong type
     assert call(srv, "export_schedule", {"ref": 17}).is_error        # wrong type
     assert call(srv, "no_such_tool", {}).is_error
