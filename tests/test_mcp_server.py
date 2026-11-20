@@ -106,3 +106,14 @@ def test_malformed_parameters_are_rejected_before_the_tool_runs(store, tmp_path)
     assert call(srv, "export_schedule", {"file_name": 5}).is_error   # wrong type
     assert call(srv, "export_schedule", {"ref": 17}).is_error        # wrong type
     assert call(srv, "no_such_tool", {}).is_error
+
+
+def test_server_instructions_keep_the_model_on_the_tools(store, tmp_path):
+    """SCRUM-105: found in the demo. The assistant must not read files to answer, must resolve
+    references with resolve_reference, and must say when a capability does not exist yet."""
+    text = build_server(store, export_dir=tmp_path).instructions.lower()
+    assert "resolve_reference" in text
+    assert "do not open, read or ask for access to" in text
+    assert "not available yet" in text
+    tools = {t.name: t for t in list_tools(build_server(store, export_dir=tmp_path))}
+    assert "before" in tools["resolve_reference"].description.lower()
