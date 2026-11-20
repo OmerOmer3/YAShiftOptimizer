@@ -9,21 +9,39 @@ Run it for a chat client over stdio:
 
     shiftopt-mcp --db shiftopt.db --export-dir exports
 
-Tools are added per story: status and export here; import, solve and run status in
-SCRUM-33; employee and coverage queries in SCRUM-34/35; approval in SCRUM-37.
+Tools are added per story: status and export (SCRUM-32/44); import, solve and run status
+(SCRUM-33); employee and coverage queries (SCRUM-34/35); approval (SCRUM-37).
 """
 from __future__ import annotations
 
 import argparse
 import os
+import re
+from functools import partial
 from pathlib import Path
+from typing import Annotated
 
+import anyio
 from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
+from pydantic import Field
 
 from shiftopt.db import Store
+from shiftopt.engine.solver import DEFAULT_SEED, DEFAULT_WORKERS
 from shiftopt.export import ExportError, export_run, resolve_run
-from shiftopt.mcp_server.models import ExportResult, SystemStatus, brief
+from shiftopt.ingest import import_workbook, read_input
+from shiftopt.mcp_server.models import (
+    ExportResult,
+    ImportResult,
+    InputIssueOut,
+    RunResult,
+    SystemStatus,
+    brief,
+)
+from shiftopt.service import NoActiveInput, run_initial
+
+MAX_TIME_BUDGET_S = 3600
+_RUN_ID = re.compile(r"^RUN-\d+$")
 
 INSTRUCTIONS = """\
 YAShiftOptimizer plans a customer-service department's weekly shifts.
@@ -37,6 +55,7 @@ Rules for the assistant:
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True, idempotentHint=True, openWorldHint=False)
 WRITES_FILE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False)
+CREATES = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False)
 
 
 def _safe_file_name(name: str) -> str | None:
@@ -83,6 +102,70 @@ def build_server(store: Store, *, export_dir: str | Path = "exports") -> MCPServ
                             solution_status=run.status,
                             total_cost=run.total_cost if run.schedule_version else None,
                             total_shortage_slots=run.total_shortage_slots if run.schedule_version else None)
+
+    @mcp.tool(annotations=CREATES)
+    def import_input(file_path: str) -> ImportResult:
+        """Import the week's input workbook (schema 1.0) from a path on this computer and make
+        it the active input. The whole file is checked first; if anything is wrong the result
+        is INVALID_INPUT with every problem by sheet, row and column, nothing is stored, and the
+        previously active input stays in force. Ask the manager for the full path if unsure."""
+        path = Path(file_path).expanduser()
+        if path.suffix.lower() != ".xlsx":
+            return ImportResult.fail("INVALID_PARAMETER", f"'{path.name}' is not an .xlsx workbook.",
+                                     active_input_version=store.active_input_version())
+        if not path.is_file():
+            return ImportResult.fail("NOT_FOUND", f"No file at {path}.",
+                                     active_input_version=store.active_input_version())
+        out = import_workbook(store, path)
+        if out.status != "OK":
+            issues = [InputIssueOut(sheet=e.sheet, row=e.row, column=e.column, code=e.code, message=e.message)
+                      for e in out.errors]
+            return ImportResult.fail("INVALID_INPUT",
+                                     f"The file has {len(issues)} problem(s); nothing was imported.",
+                                     active_input_version=store.active_input_version(),
+                                     file_name=path.name, issues=issues)
+        data = store.load_input(out.input_version)
+        return ImportResult(input_version=out.input_version, active_input_version=out.input_version,
+                            file_name=path.name, week_start=data.week_start.isoformat(),
+                            employee_count=len(data.employees), demand_hours=len(data.demand),
+                            shift_templates=len(data.templates))
+
+    @mcp.tool(annotations=CREATES)
+    async def create_schedule(
+        time_budget_seconds: Annotated[float, Field(gt=0, le=MAX_TIME_BUDGET_S,
+                                                    description="Total seconds for all solver stages")],
+        workers: Annotated[int, Field(ge=1, le=64)] = DEFAULT_WORKERS,
+        seed: int = DEFAULT_SEED,
+    ) -> RunResult:
+        """Create a schedule for the active input within the given time budget. Coverage
+        shortage is minimized first, then cost. The result is checked by the independent
+        checker and saved as a DRAFT; the active schedule does not change until the manager
+        approves. A week with no possible schedule returns status INFEASIBLE with reasons
+        in diagnostics; that is a valid result, not a tool error. Returns the run ID."""
+        try:
+            outcome = await anyio.to_thread.run_sync(
+                partial(run_initial, store, time_budget_seconds, workers=workers, seed=seed))
+        except NoActiveInput as e:
+            return RunResult.fail("NO_ACTIVE_INPUT", f"{e}. Import the week's file first (import_input).")
+        return RunResult(run=brief(outcome.run), active_schedule_version=store.active_schedule_version())
+
+    @mcp.tool(annotations=READ_ONLY)
+    def get_run_status(run_id: str | None = None) -> RunResult:
+        """Status and result of a run: solution status, shortage, cost, which objectives were
+        proven optimal, timings, the draft it created and any diagnostics. Without run_id,
+        the latest run."""
+        runs = store.list_runs()
+        if not runs:
+            return RunResult.fail("NOT_FOUND", "No runs yet. Create a schedule first (create_schedule).")
+        if run_id is None:
+            run = runs[-1]
+        else:
+            ref = run_id.strip().upper()
+            run = store.get_run(ref) if _RUN_ID.match(ref) else None
+            if run is None:
+                return RunResult.fail("NOT_FOUND", f"Run {run_id} not found.",
+                                      candidates=[r.run_id for r in runs][-10:])
+        return RunResult(run=brief(run), active_schedule_version=store.active_schedule_version())
 
     return mcp
 

@@ -56,9 +56,14 @@ class RunBrief(BaseModel):
     coverage_proven: bool | None
     cost_proven: bool | None
     validation_passed: bool | None
+    time_budget_seconds: float
+    first_feasible_seconds: float | None = Field(description="Empty if no solution was found")
     optimization_seconds: float
-    schedule_version: str | None
+    schedule_version: str | None = Field(description="The DRAFT created by this run; empty if no schedule")
     approval_status: str | None
+    diagnostics: list[str] = Field(default_factory=list,
+                                   description="Plain-language reasons, e.g. why a week has no solution")
+    solver_info: dict = Field(default_factory=dict, description="Solver version, threads, seed and machine")
 
 
 class SystemStatus(ToolResult):
@@ -82,5 +87,32 @@ def brief(run) -> RunBrief:
         run_id=run.run_id, input_version=run.input_version, run_type=run.run_type, status=run.status,
         termination_reason=run.termination_reason, total_shortage_slots=run.total_shortage_slots,
         total_cost=run.total_cost, coverage_proven=run.coverage_proven, cost_proven=run.cost_proven,
-        validation_passed=run.validation_passed, optimization_seconds=round(run.optimization_seconds, 3),
-        schedule_version=run.schedule_version, approval_status=run.approval_status)
+        validation_passed=run.validation_passed, time_budget_seconds=run.time_budget_seconds,
+        first_feasible_seconds=None if run.first_feasible_seconds is None else round(run.first_feasible_seconds, 3),
+        optimization_seconds=round(run.optimization_seconds, 3),
+        schedule_version=run.schedule_version, approval_status=run.approval_status,
+        diagnostics=list(run.diagnostics), solver_info=dict(run.solver_info))
+
+
+class InputIssueOut(BaseModel):
+    sheet: str
+    row: int | None = Field(description="Excel row number; the header is row 1. Empty for sheet-level problems")
+    column: str | None
+    code: str
+    message: str
+
+
+class ImportResult(ToolResult):
+    input_version: str | None = Field(None, description="The new active input version; empty if the file was rejected")
+    active_input_version: str | None = Field(None, description="The input version in force after this call")
+    file_name: str | None = None
+    week_start: str | None = None
+    employee_count: int | None = None
+    demand_hours: int | None = None
+    shift_templates: int | None = None
+    issues: list[InputIssueOut] = Field(default_factory=list, description="Every problem found, by sheet, row and column")
+
+
+class RunResult(ToolResult):
+    run: RunBrief | None = None
+    active_schedule_version: str | None = Field(None, description="Unchanged by a new run (spec section 4)")
