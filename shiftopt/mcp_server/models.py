@@ -116,3 +116,9 @@ class ImportResult(ToolResult):
 class RunResult(ToolResult):
     run: RunBrief | None = None
     active_schedule_version: str | None = Field(None, description="Unchanged by a new run (spec section 4)")
+
+
+class ResolveResult(ToolResult):
+    kind: str | None = None
+    value: str | None = Field(None, description="The one matching ID: employee ID, ISO date or schedule version")
+    label: str | None = Field(None, description="Human-readable form to confirm with the manager")

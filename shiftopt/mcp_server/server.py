@@ -10,7 +10,8 @@ Run it for a chat client over stdio:
     shiftopt-mcp --db shiftopt.db --export-dir exports
 
 Tools are added per story: status and export (SCRUM-32/44); import, solve and run status
-(SCRUM-33); employee and coverage queries (SCRUM-34/35); approval (SCRUM-37).
+(SCRUM-33); resolving employees, dates and drafts (SCRUM-36);
+employee and coverage queries (SCRUM-34/35); approval (SCRUM-37).
 """
 from __future__ import annotations
 
@@ -19,7 +20,7 @@ import os
 import re
 from functools import partial
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 import anyio
 from mcp.server.mcpserver import MCPServer
@@ -34,11 +35,13 @@ from shiftopt.mcp_server.models import (
     ExportResult,
     ImportResult,
     InputIssueOut,
+    ResolveResult,
     RunResult,
     SystemStatus,
     brief,
 )
 from shiftopt.service import NoActiveInput, run_initial
+from shiftopt.service.resolve import Unresolved, date_label, resolve_date, resolve_draft, resolve_employee
 
 MAX_TIME_BUDGET_S = 3600
 _RUN_ID = re.compile(r"^RUN-\d+$")
@@ -81,27 +84,55 @@ def build_server(store: Store, *, export_dir: str | Path = "exports") -> MCPServ
                             run_count=len(runs), latest_run=brief(runs[-1]) if runs else None)
 
     @mcp.tool(annotations=WRITES_FILE)
-    def export_schedule(ref: str, file_name: str | None = None) -> ExportResult:
+    def export_schedule(ref: str | None = None, file_name: str | None = None) -> ExportResult:
         """Export a schedule to Excel in the course output schema (Schedule, Coverage,
-        EmployeeSummary, RunSummary). ref is a run ID such as RUN-0003 or a schedule
-        version such as SV-0003. file_name is optional, a bare name ending in .xlsx; the
-        file is written to the server's export folder and its full path is returned.
-        A run without a schedule is exported with headers only and its status."""
-        name = _safe_file_name(file_name) if file_name else f"{ref.strip().upper()}.xlsx"
-        if name is None:
+        EmployeeSummary, RunSummary). ref is a schedule version (SV-0003), a run ID
+        (RUN-0003) or 'latest'; leave it empty for 'the draft'. If that is ambiguous
+        (several drafts) the answer is AMBIGUOUS with the drafts to choose from, and no
+        file is written. file_name is optional, a bare name ending in .xlsx; the file is
+        written to the server's export folder and its full path is returned."""
+        if file_name and _safe_file_name(file_name) is None:
             return ExportResult.fail("INVALID_PARAMETER",
                                      f"'{file_name}' is not a plain .xlsx file name (no folders).")
         try:
-            path = export_run(store, ref, export_dir / name)
+            # A run ID is exported as that run, even if it produced no schedule (headers only).
+            target = ref.strip().upper() if ref and _RUN_ID.match(ref.strip().upper()) else resolve_draft(store, ref)
+            run = resolve_run(store, target)
+            name = file_name or f"{target}.xlsx"
+            path = export_run(store, target, export_dir / name)
+        except Unresolved as e:
+            return ExportResult.fail(e.code, e.message, candidates=e.candidates)
         except ExportError as e:
-            runs = [r.run_id for r in store.list_runs()][-10:]
             msg = str(e)
-            return ExportResult.fail("NOT_FOUND", msg[:1].upper() + msg[1:] + ".", candidates=runs)
-        run = resolve_run(store, ref)
+            return ExportResult.fail("NOT_FOUND", msg[:1].upper() + msg[1:] + ".",
+                                     candidates=[r.run_id for r in store.list_runs()][-10:])
         return ExportResult(path=str(path), run_id=run.run_id, schedule_version=run.schedule_version,
                             solution_status=run.status,
                             total_cost=run.total_cost if run.schedule_version else None,
                             total_shortage_slots=run.total_shortage_slots if run.schedule_version else None)
+
+    @mcp.tool(annotations=READ_ONLY)
+    def resolve_reference(kind: Literal["employee", "date", "draft"], text: str) -> ResolveResult:
+        """Check what the manager referred to before acting. kind 'employee': an ID or a
+        name; 'date': a date or a day name such as 'Wednesday' or 'רביעי', resolved only
+        within the planning week; 'draft': SV-0003, RUN-0003, 'latest' or empty. Returns
+        exactly one value, or AMBIGUOUS / NOT_FOUND with candidates: then ask the manager
+        to choose and do not guess. Changes nothing."""
+        try:
+            if kind == "draft":
+                v = resolve_draft(store, text)
+                info = store.schedule_version_info(v)
+                return ResolveResult(kind=kind, value=v, label=f"{v} ({info['run_id']}, {info['approval_status']})")
+            data = store.load_input()
+            if data is None:
+                return ResolveResult.fail("NO_ACTIVE_INPUT", "No input has been imported yet.")
+            if kind == "employee":
+                e = resolve_employee(data, text)
+                return ResolveResult(kind=kind, value=e, label=f"{e} ({data.employees[e].name})")
+            d = resolve_date(data, text)
+            return ResolveResult(kind=kind, value=d.isoformat(), label=date_label(d))
+        except Unresolved as e:
+            return ResolveResult.fail(e.code, e.message, candidates=e.candidates, kind=kind)
 
     @mcp.tool(annotations=CREATES)
     def import_input(file_path: str) -> ImportResult:

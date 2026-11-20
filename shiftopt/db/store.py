@@ -358,6 +358,24 @@ class Store:
                     "is_active": sv.is_active,
                     "base_version": None if sv.base_version_id is None else _code("SV", sv.base_version_id)}
 
+    def list_schedule_versions(self, *, input_version: str | None = None,
+                               approval_status: str | None = None) -> list[dict]:
+        """Schedule versions, newest first, with the numbers of the run that produced them."""
+        with Session(self.engine) as s:
+            q = select(ScheduleVersionRow, RunRow).join(RunRow, RunRow.id == ScheduleVersionRow.run_id)
+            if input_version:
+                q = q.where(ScheduleVersionRow.input_version_id == _num(input_version))
+            if approval_status:
+                q = q.where(ScheduleVersionRow.approval_status == approval_status)
+            out = []
+            for sv, run in s.execute(q.order_by(ScheduleVersionRow.id.desc())):
+                out.append({"schedule_version": _code("SV", sv.id), "run_id": _code("RUN", run.id),
+                            "input_version": _code("IN", sv.input_version_id), "approval_status": sv.approval_status,
+                            "is_active": sv.is_active, "created_at": sv.created_at,
+                            "total_cost": None if run.total_cost_cents is None else run.total_cost_cents / 100,
+                            "total_shortage_slots": run.total_shortage_slots})
+            return out
+
     def active_schedule_version(self) -> str | None:
         """The approved, active schedule. Only approval (sprint 3, SCRUM-37) sets it."""
         with Session(self.engine) as s:
