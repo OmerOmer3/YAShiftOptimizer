@@ -6,10 +6,10 @@ so the optimizer can be measured in isolation (spec section 9).
     shiftopt runs
     shiftopt show-run RUN-0001
     shiftopt validate samples/Input_Small_10.xlsx samples/Output_Small_10.xlsx
+    shiftopt export RUN-0001 out.xlsx        (or a schedule version, SV-0001)
 
 Exit codes: 0 success, 1 a schedule failed validation or no schedule was produced,
-2 the input file is invalid or missing.
-Export (SCRUM-44) is added in sprint 3.
+2 the input file is invalid or missing, or the run to export does not exist.
 """
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ import sys
 
 from shiftopt.db import Store
 from shiftopt.engine.solver import DEFAULT_SEED, DEFAULT_WORKERS
+from shiftopt.export import ExportError, export_run
 from shiftopt.ingest import import_workbook, read_input
 from shiftopt.ingest.schedule_reader import read_schedule
 from shiftopt.service import NoActiveInput, run_initial
@@ -132,6 +133,16 @@ def _cmd_validate(a) -> int:
     return 0 if rep.passed else 1
 
 
+def _cmd_export(a) -> int:
+    try:
+        out = export_run(Store(a.db), a.ref, a.file)
+    except ExportError as e:
+        print(f"ERROR  {e}")
+        return 2
+    print(f"OK  exported {a.ref} to {out}")
+    return 0
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="shiftopt")
     p.add_argument("--db", default="shiftopt.db", help="SQLite file or SQLAlchemy URL (default shiftopt.db)")
@@ -160,6 +171,11 @@ def main(argv=None) -> int:
     pv.add_argument("schedule")
     pv.add_argument("--group-size", type=int, default=2, choices=[2, 3])
     pv.set_defaults(fn=_cmd_validate)
+
+    pe = sub.add_parser("export", help="write a run or schedule version as an Excel file in the output schema")
+    pe.add_argument("ref", help="run ID (RUN-0001) or schedule version (SV-0001)")
+    pe.add_argument("file", help="output .xlsx path")
+    pe.set_defaults(fn=_cmd_export)
 
     a = p.parse_args(argv)
     if a.cmd == "solve" and a.time_budget <= 0:

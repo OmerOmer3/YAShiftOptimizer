@@ -33,6 +33,9 @@ shiftopt show-run RUN-0001
 
 # Check any schedule workbook against an input with the independent validator
 shiftopt validate samples/Input_Small_10.xlsx samples/Output_Small_10.xlsx
+
+# Export a run (or a schedule version, SV-0001) in the output schema of spec sections 7-8
+shiftopt export RUN-0001 Schedule.xlsx
 ```
 
 ## Test
@@ -54,7 +57,7 @@ CI runs the same command on every push (`.github/workflows/ci.yml`).
 | `shiftopt/engine` | CP-SAT model: shortage first, then cost, one time budget ([docs/model.md](docs/model.md)) | Sprint 2 |
 | `shiftopt/service` | Runs and drafts (later: approval, repair) | Sprint 2 (partial) |
 | `shiftopt/mcp_server` | MCP tools for the chat client | Sprint 3 |
-| `shiftopt/export` | Output workbook (Schedule, Coverage, EmployeeSummary, RunSummary) | Sprint 3 |
+| `shiftopt/export` | Output workbook (RunSummary, Schedule, Coverage, EmployeeSummary, Instructions); metrics from the independent checker, values only | Sprint 3 |
 | `shiftopt/baseline` | Greedy baseline for comparison | Sprint 5 |
 | `samples/` | Course sample files (input schema 1.0, sample output) | |
 | `docs/model.md` | Optimization model: variables, constraints, objective order, time budget | Sprint 2 |
