@@ -40,8 +40,8 @@ def _instructions(run, has_schedule: bool) -> list[tuple[str, str]]:
     return rows
 
 
-def export_run(store: Store, ref: str, path: str | Path) -> Path:
-    """Export the run `ref` (RUN-0001) or the run that produced schedule version `ref` (SV-0001)."""
+def resolve_run(store: Store, ref: str):
+    """The run `ref` (RUN-0001), or the run that produced schedule version `ref` (SV-0001)."""
     ref = ref.strip().upper()
     if not _REF.match(ref):
         raise ExportError(f"'{ref}' is not a run ID (RUN-0001) or a schedule version (SV-0001)")
@@ -53,6 +53,12 @@ def export_run(store: Store, ref: str, path: str | Path) -> Path:
     run = store.get_run(ref)
     if run is None:
         raise ExportError(f"run {ref} not found")
+    return run
+
+
+def export_run(store: Store, ref: str, path: str | Path) -> Path:
+    """Export the run `ref` (RUN-0001) or the run that produced schedule version `ref` (SV-0001)."""
+    run = resolve_run(store, ref)
 
     data = store.load_input(run.input_version)
     schedule = store.load_schedule(run.schedule_version) if run.schedule_version else None
