@@ -142,31 +142,50 @@ def resolve_date(data: InputData, text: str) -> dt.date:
 _LATEST = {"latest", "last", "newest", "the latest", "the last one", "אחרונה", "האחרונה", "הטיוטה האחרונה", "האחרון"}
 
 
-def _draft_label(v: dict) -> str:
-    cost = "-" if v["total_cost"] is None else f"{v['total_cost']:,.2f}"
-    return (f"{v['schedule_version']} ({v['run_id']}, cost {cost}, shortage {v['total_shortage_slots']} half-hours, "
-            f"created {v['created_at']:%Y-%m-%d %H:%M})")
+_ORDINALS = {"first": 1, "the first": 1, "the first one": 1, "ראשונה": 1, "הראשונה": 1,
+             "second": 2, "the second": 2, "the second one": 2, "שנייה": 2, "השנייה": 2, "השניה": 2,
+             "third": 3, "the third": 3, "the third one": 3, "שלישית": 3, "השלישית": 3}
+
+
+def _draft_labels(drafts_newest_first: list[dict]) -> list[str]:
+    """Oldest first and numbered, so "the first one" means the same in the list and in time."""
+    out = []
+    for i, v in enumerate(reversed(drafts_newest_first), start=1):
+        cost = "-" if v["total_cost"] is None else f"{v['total_cost']:,.2f}"
+        out.append(f"{v['schedule_version']} (#{i}, created {v['created_at']:%Y-%m-%d %H:%M}, {v['run_id']}, "
+                   f"cost {cost}, shortage {v['total_shortage_slots']} half-hours)")
+    return out
 
 
 def resolve_draft(store, text: str | None) -> str:
-    """A schedule version (SV-0003), the run that made it (RUN-0003), 'latest', or nothing.
+    """A schedule version (SV-0003), the run that made it (RUN-0003), 'latest', a number from
+    the AMBIGUOUS list ('#1', 'first', 'הראשונה'; oldest first), or nothing.
     Unnamed or 'latest' consider only DRAFTs of the active input. Unnamed with several
     drafts is AMBIGUOUS: the manager chooses."""
     active = store.active_input_version()
     drafts = store.list_schedule_versions(input_version=active, approval_status="DRAFT") if active else []
-    labels = [_draft_label(v) for v in drafts]
+    labels = _draft_labels(drafts)
     q = _norm(text or "")
 
     if q in ("", "draft", "the draft", "הטיוטה", "טיוטה"):
         if not drafts:
             raise Unresolved("NOT_FOUND", "There is no draft for the current input. Create a schedule first.", [])
         if len(drafts) > 1:
-            raise Unresolved("AMBIGUOUS", f"There are {len(drafts)} drafts for the current input; which one?", labels)
+            raise Unresolved("AMBIGUOUS", f"There are {len(drafts)} drafts for the current input, listed oldest first; "
+                                          "which one?", labels)
         return drafts[0]["schedule_version"]
     if q in _LATEST:
         if not drafts:
             raise Unresolved("NOT_FOUND", "There is no draft for the current input. Create a schedule first.", [])
         return drafts[0]["schedule_version"]
+
+    m = re.fullmatch(r"#?(\d{1,2})", q)
+    pos = int(m.group(1)) if m else _ORDINALS.get(q)
+    if pos is not None:
+        oldest_first = list(reversed(drafts))
+        if 1 <= pos <= len(oldest_first):
+            return oldest_first[pos - 1]["schedule_version"]
+        raise Unresolved("NOT_FOUND", f"There is no draft #{pos}; there are {len(drafts)}.", labels)
 
     ref = q.upper()
     if re.fullmatch(r"SV-\d+", ref):
