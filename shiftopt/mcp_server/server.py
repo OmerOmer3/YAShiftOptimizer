@@ -51,7 +51,10 @@ YAShiftOptimizer plans a customer-service department's weekly shifts.
 Rules for the assistant:
 - Every number you report (hours, costs, shortages, counts) must come from a tool result. Do not compute or estimate.
 - Do not judge whether a schedule is valid; the server's independent checker does (ValidationPassed).
-- If a request does not identify one employee, date or draft, or a tool returns AMBIGUOUS, ask the manager to choose.
+- Whenever the manager names an employee, a date or day, or a draft, call resolve_reference first. If it returns
+  AMBIGUOUS or NOT_FOUND, show the candidates and ask the manager to choose. Never pick one yourself.
+- Do not open, read or ask for access to the input or exported Excel files to answer questions; the tools are the
+  only source. If no tool answers a question, say that this is not available yet instead of looking elsewhere.
 - Creating a schedule makes a DRAFT. Nothing becomes the active schedule until the manager explicitly approves it.
 - An empty value means 'not available', not zero; say so instead of reporting 0.
 """
@@ -113,9 +116,10 @@ def build_server(store: Store, *, export_dir: str | Path = "exports") -> MCPServ
 
     @mcp.tool(annotations=READ_ONLY)
     def resolve_reference(kind: Literal["employee", "date", "draft"], text: str) -> ResolveResult:
-        """Check what the manager referred to before acting. kind 'employee': an ID or a
-        name; 'date': a date or a day name such as 'Wednesday' or 'רביעי', resolved only
-        within the planning week; 'draft': SV-0003, RUN-0003, 'latest' or empty. Returns
+        """Call this before acting whenever the manager names an employee, a date or a draft.
+        kind 'employee': an ID or a name; 'date': a date or a day name such as 'Wednesday' or 'רביעי', resolved only
+        within the planning week; 'draft': SV-0003, RUN-0003, 'latest', a number from the
+        list of drafts ('#1', 'first'; oldest first) or empty. Returns
         exactly one value, or AMBIGUOUS / NOT_FOUND with candidates: then ask the manager
         to choose and do not guess. Changes nothing."""
         try:

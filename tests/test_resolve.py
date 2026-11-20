@@ -111,8 +111,15 @@ def test_two_drafts_without_a_name_are_ambiguous(store):
     run_initial(store, 10, workers=2)
     run_initial(store, 10, workers=2, seed=1)
     e = _fails(resolve_draft, store, None, code="AMBIGUOUS")
-    assert [c.split()[0] for c in e.candidates] == ["SV-0002", "SV-0001"]   # newest first
-    assert "RUN-0002" in e.candidates[0] and "cost" in e.candidates[0]
+    # Oldest first and numbered, so "the first one" means the same in the list and in time (SCRUM-105).
+    assert [c.split()[0] for c in e.candidates] == ["SV-0001", "SV-0002"]
+    assert "#1" in e.candidates[0] and "#2" in e.candidates[1]
+    assert "RUN-0001" in e.candidates[0] and "cost" in e.candidates[0]
+    assert "oldest first" in e.message
+    for q, v in (("#1", "SV-0001"), ("1", "SV-0001"), ("first", "SV-0001"), ("הראשונה", "SV-0001"),
+                 ("#2", "SV-0002"), ("השנייה", "SV-0002"), ("second", "SV-0002")):
+        assert resolve_draft(store, q) == v, q                     # the numbers shown in the list
+    _fails(resolve_draft, store, "#3", code="NOT_FOUND")
     assert resolve_draft(store, "latest") == "SV-0002"
     assert resolve_draft(store, "האחרונה") == "SV-0002"
     assert resolve_draft(store, "sv-0001") == "SV-0001"
