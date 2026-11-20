@@ -38,6 +38,33 @@ shiftopt validate samples/Input_Small_10.xlsx samples/Output_Small_10.xlsx
 shiftopt export RUN-0001 Schedule.xlsx
 ```
 
+## Chat client (MCP)
+
+The manager works through an existing MCP chat client; the server runs on the same computer
+over stdio and uses the same database as the command line.
+
+```bash
+shiftopt-mcp --db shiftopt.db --export-dir exports      # or: python -m shiftopt.mcp_server ...
+```
+
+Claude Desktop: Settings → Developer → Edit Config, then add (use absolute paths):
+
+```json
+{
+  "mcpServers": {
+    "yashiftoptimizer": {
+      "command": "/absolute/path/to/.venv/bin/shiftopt-mcp",
+      "args": ["--db", "/absolute/path/to/shiftopt.db", "--export-dir", "/absolute/path/to/exports"]
+    }
+  }
+}
+```
+
+On Windows the command is `C:\path\to\.venv\Scripts\shiftopt-mcp.exe`. Restart the client after editing.
+Tools so far: `get_system_status`, `export_schedule` (more are added per story in sprint 3).
+Every number the assistant reports comes from a tool result; business errors come back as
+`{"ok": false, "error": {"code", "message", "candidates"}}` so the assistant can ask the manager.
+
 ## Test
 
 ```bash
@@ -56,7 +83,7 @@ CI runs the same command on every push (`.github/workflows/ci.yml`).
 | `shiftopt/validator` | Independent hard-rule checker and metrics; never imports `engine` | Sprint 1 |
 | `shiftopt/engine` | CP-SAT model: shortage first, then cost, one time budget ([docs/model.md](docs/model.md)) | Sprint 2 |
 | `shiftopt/service` | Runs and drafts (later: approval, repair) | Sprint 2 (partial) |
-| `shiftopt/mcp_server` | MCP tools for the chat client | Sprint 3 |
+| `shiftopt/mcp_server` | MCP server (SDK 2.x `MCPServer`): typed tools, structured errors, stdio | Sprint 3 |
 | `shiftopt/export` | Output workbook (RunSummary, Schedule, Coverage, EmployeeSummary, Instructions); metrics from the independent checker, values only | Sprint 3 |
 | `shiftopt/baseline` | Greedy baseline for comparison | Sprint 5 |
 | `samples/` | Course sample files (input schema 1.0, sample output) | |
