@@ -7,8 +7,10 @@ so the optimizer can be measured in isolation (spec section 9).
     shiftopt show-run RUN-0001
     shiftopt validate samples/Input_Small_10.xlsx samples/Output_Small_10.xlsx
     shiftopt export RUN-0001 out.xlsx        (or a schedule version, SV-0001)
+    shiftopt approve SV-0001                 (make a draft the active schedule)
 
-Exit codes: 0 success, 1 a schedule failed validation or no schedule was produced,
+Exit codes: 0 success, 1 a schedule failed validation, no schedule was produced or an
+approval was refused,
 2 the input file is invalid or missing, or the run to export does not exist.
 """
 from __future__ import annotations
@@ -21,7 +23,7 @@ from shiftopt.engine.solver import DEFAULT_SEED, DEFAULT_WORKERS
 from shiftopt.export import ExportError, export_run
 from shiftopt.ingest import import_workbook, read_input
 from shiftopt.ingest.schedule_reader import read_schedule
-from shiftopt.service import NoActiveInput, run_initial
+from shiftopt.service import ApprovalRefused, NoActiveInput, approve_draft, run_initial
 from shiftopt.validator import validate
 
 
@@ -143,6 +145,19 @@ def _cmd_export(a) -> int:
     return 0
 
 
+def _cmd_approve(a) -> int:
+    try:
+        out = approve_draft(Store(a.db), a.version)
+    except ApprovalRefused as e:
+        print(f"REFUSED  {e.code}: {e.message}")
+        for d in e.details:
+            print(f"  {d}")
+        return 1
+    replaced = f", replaces {out.replaced_version}" if out.replaced_version else ""
+    print(f"OK  {out.schedule_version} APPROVED and active at {out.approved_at:%Y-%m-%d %H:%M:%S}{replaced}")
+    return 0
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="shiftopt")
     p.add_argument("--db", default="shiftopt.db", help="SQLite file or SQLAlchemy URL (default shiftopt.db)")
@@ -176,6 +191,10 @@ def main(argv=None) -> int:
     pe.add_argument("ref", help="run ID (RUN-0001) or schedule version (SV-0001)")
     pe.add_argument("file", help="output .xlsx path")
     pe.set_defaults(fn=_cmd_export)
+
+    pa = sub.add_parser("approve", help="approve a draft so that it becomes the active schedule")
+    pa.add_argument("version", help="schedule version, e.g. SV-0001")
+    pa.set_defaults(fn=_cmd_approve)
 
     a = p.parse_args(argv)
     if a.cmd == "solve" and a.time_budget <= 0:

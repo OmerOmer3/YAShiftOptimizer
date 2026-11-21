@@ -128,6 +128,13 @@ class RunRow(Base):
     started_at: Mapped[dt.datetime] = mapped_column(DateTime)
 
 
+class StaleState(Exception):
+    """The state an approval was checked against changed before it was written."""
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
 class ScheduleVersionRow(Base):
     __tablename__ = "schedule_versions"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -355,7 +362,7 @@ class Store:
                 return None
             return {"schedule_version": _code("SV", sv.id), "run_id": _code("RUN", sv.run_id),
                     "input_version": _code("IN", sv.input_version_id), "approval_status": sv.approval_status,
-                    "is_active": sv.is_active,
+                    "is_active": sv.is_active, "created_at": sv.created_at, "approved_at": sv.approved_at,
                     "base_version": None if sv.base_version_id is None else _code("SV", sv.base_version_id)}
 
     def list_schedule_versions(self, *, input_version: str | None = None,
@@ -376,8 +383,30 @@ class Store:
                             "total_shortage_slots": run.total_shortage_slots})
             return out
 
+    def approve(self, version: str, *, expected_input: str, expected_active: str | None) -> tuple[dt.datetime, str | None]:
+        """Make `version` APPROVED and the only active schedule, in one transaction.
+
+        The caller has checked the draft; here the state it checked against is confirmed
+        again inside the transaction (compare-and-set), so a concurrent import or approval
+        cannot slip in between. Raises StaleState(code) if it changed. Returns
+        (approved_at, replaced_version)."""
+        with Session(self.engine) as s, s.begin():
+            sv = s.get(ScheduleVersionRow, _num(version))
+            active_in = s.scalars(select(InputVersionRow).where(InputVersionRow.is_active)).first()
+            if active_in is None or active_in.id != _num(expected_input) or sv.input_version_id != active_in.id:
+                raise StaleState("INPUT_VERSION_STALE")
+            current = s.scalars(select(ScheduleVersionRow).where(ScheduleVersionRow.is_active)).first()
+            if (None if current is None else _code("SV", current.id)) != expected_active:
+                raise StaleState("ACTIVE_CHANGED")
+            if sv.approval_status != "DRAFT":
+                raise StaleState("ALREADY_APPROVED")
+            now = dt.datetime.now()
+            s.execute(update(ScheduleVersionRow).where(ScheduleVersionRow.is_active).values(is_active=False))
+            sv.approval_status, sv.is_active, sv.approved_at = "APPROVED", True, now
+            return now, expected_active
+
     def active_schedule_version(self) -> str | None:
-        """The approved, active schedule. Only approval (sprint 3, SCRUM-37) sets it."""
+        """The approved, active schedule. Only approve() changes it (SCRUM-37)."""
         with Session(self.engine) as s:
             sv = s.scalars(select(ScheduleVersionRow).where(ScheduleVersionRow.is_active)).first()
             return None if sv is None else _code("SV", sv.id)

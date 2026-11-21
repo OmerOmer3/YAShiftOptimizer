@@ -24,6 +24,8 @@ ErrorCode = Literal[
     "BASE_VERSION_STALE",   # approval refused: the draft's base is no longer active (SCRUM-38)
     "INPUT_VERSION_STALE",  # approval refused: a newer input was imported (SCRUM-38)
     "VALIDATION_FAILED",    # the independent checker rejected the schedule
+    "ALREADY_APPROVED",     # approval refused: the version is not a draft
+    "CONFLICT",             # the active schedule changed while approving; nothing was changed
     "INTERNAL_ERROR",
 ]
 
@@ -122,3 +124,14 @@ class ResolveResult(ToolResult):
     kind: str | None = None
     value: str | None = Field(None, description="The one matching ID: employee ID, ISO date or schedule version")
     label: str | None = Field(None, description="Human-readable form to confirm with the manager")
+
+
+class ApprovalResult(ToolResult):
+    schedule_version: str | None = None
+    run_id: str | None = None
+    approved_at: str | None = Field(None, description="ISO time of the approval")
+    replaced_version: str | None = Field(None, description="The schedule that was active before; empty if none")
+    total_cost: float | None = None
+    total_shortage_slots: int | None = None
+    active_schedule_version: str | None = Field(None, description="The active schedule after this call")
+    details: list[str] = Field(default_factory=list, description="Checker violations when VALIDATION_FAILED")

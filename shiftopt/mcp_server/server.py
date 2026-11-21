@@ -32,6 +32,7 @@ from shiftopt.engine.solver import DEFAULT_SEED, DEFAULT_WORKERS
 from shiftopt.export import ExportError, export_run, resolve_run
 from shiftopt.ingest import import_workbook, read_input
 from shiftopt.mcp_server.models import (
+    ApprovalResult,
     ExportResult,
     ImportResult,
     InputIssueOut,
@@ -41,6 +42,7 @@ from shiftopt.mcp_server.models import (
     brief,
 )
 from shiftopt.service import NoActiveInput, run_initial
+from shiftopt.service.approve import ApprovalRefused, approve_draft as approve_service
 from shiftopt.service.resolve import Unresolved, date_label, resolve_date, resolve_draft, resolve_employee
 
 MAX_TIME_BUDGET_S = 3600
@@ -56,12 +58,15 @@ Rules for the assistant:
 - Do not open, read or ask for access to the input or exported Excel files to answer questions; the tools are the
   only source. If no tool answers a question, say that this is not available yet instead of looking elsewhere.
 - Creating a schedule makes a DRAFT. Nothing becomes the active schedule until the manager explicitly approves it.
+  Call approve_draft only when the manager has clearly asked to approve that draft; never on your own initiative.
 - An empty value means 'not available', not zero; say so instead of reporting 0.
 """
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True, idempotentHint=True, openWorldHint=False)
 WRITES_FILE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False)
 CREATES = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False)
+# Approval replaces the active schedule (the old one is kept in history): flagged so clients confirm.
+CHANGES_ACTIVE = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False)
 
 
 def _safe_file_name(name: str) -> str | None:
@@ -201,6 +206,29 @@ def build_server(store: Store, *, export_dir: str | Path = "exports") -> MCPServ
                 return RunResult.fail("NOT_FOUND", f"Run {run_id} not found.",
                                       candidates=[r.run_id for r in runs][-10:])
         return RunResult(run=brief(run), active_schedule_version=store.active_schedule_version())
+
+    @mcp.tool(annotations=CHANGES_ACTIVE)
+    def approve_draft(ref: str | None = None) -> ApprovalResult:
+        """Approve a draft so that it becomes the active schedule. Only when the manager has
+        clearly asked to approve it. ref: SV-0003, RUN-0003, 'latest', a number from the
+        list of drafts, or empty for 'the draft' (AMBIGUOUS if there are several: ask which).
+        The server first checks that the draft's input is still the current input and that
+        the schedule passes the independent checker; otherwise nothing changes and the
+        reason is returned. The previously active schedule is kept in history."""
+        try:
+            version = resolve_draft(store, ref)
+            out = approve_service(store, version)
+        except Unresolved as e:
+            return ApprovalResult.fail(e.code, e.message, candidates=e.candidates,
+                                       active_schedule_version=store.active_schedule_version())
+        except ApprovalRefused as e:
+            return ApprovalResult.fail(e.code, e.message, details=e.details,
+                                       active_schedule_version=store.active_schedule_version())
+        return ApprovalResult(schedule_version=out.schedule_version, run_id=out.run_id,
+                              approved_at=out.approved_at.isoformat(timespec="seconds"),
+                              replaced_version=out.replaced_version, total_cost=out.total_cost,
+                              total_shortage_slots=out.total_shortage_slots,
+                              active_schedule_version=store.active_schedule_version())
 
     return mcp
 
