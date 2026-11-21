@@ -197,3 +197,32 @@ class CoverageResult(ToolResult):
     day: str | None = Field(None, description="The day asked about, if any")
     day_slots: list[SlotOut] = Field(default_factory=list, description="All half-hours of that day")
     day_shifts: list[ShiftOut] = Field(default_factory=list, description="Who works that day")
+
+
+class EmployeeShiftOut(BaseModel):
+    date: str
+    weekday: str
+    shift_id: str
+    start: str
+    end: str
+    breaks: list[str] = Field(description="Break times, start-end; an employee on a break is not counted as working")
+    paid_hours: float
+    cost: float
+    is_locked: bool
+
+
+class EmployeeResult(ToolResult):
+    schedule_version: str | None = None
+    approval_status: str | None = None
+    is_active: bool | None = Field(None, description="True if this is the active (approved) schedule")
+    employee_id: str | None = None
+    name: str | None = None
+    shift_count: int | None = None
+    paid_hours: float | None = None
+    total_cost: float | None = None
+    preferred_start: str | None = None
+    preferred_count: int | None = Field(None, description="Empty for a pair team: not relevant")
+    preference_rate: float | None = None
+    min_shifts_exempt: bool | None = None
+    unavailable_dates: list[str] = Field(default_factory=list, description="From the input")
+    shifts: list[EmployeeShiftOut] = Field(default_factory=list)
