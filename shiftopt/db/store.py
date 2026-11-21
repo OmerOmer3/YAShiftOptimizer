@@ -147,6 +147,20 @@ class ScheduleVersionRow(Base):
     approved_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class AuditLogRow(Base):
+    """One recorded change to the schedule (SCRUM-24). Written in the same transaction as
+    the change itself. Actions: APPROVED now; LOCKED, UNLOCKED, ABSENCE_REPORTED in sprint 4."""
+    __tablename__ = "audit_log"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    at: Mapped[dt.datetime] = mapped_column(DateTime)
+    action: Mapped[str] = mapped_column(String(32))
+    schedule_version_id: Mapped[int] = mapped_column(ForeignKey("schedule_versions.id"))
+    replaced_version_id: Mapped[int | None] = mapped_column(ForeignKey("schedule_versions.id"), nullable=True)
+    input_version_id: Mapped[int | None] = mapped_column(ForeignKey("input_versions.id"), nullable=True)
+    run_id: Mapped[int | None] = mapped_column(ForeignKey("runs.id"), nullable=True)
+    details: Mapped[str] = mapped_column(Text, default="{}")   # JSON
+
+
 class AssignmentRow(Base):
     __tablename__ = "assignments"
     schedule_version_id: Mapped[int] = mapped_column(ForeignKey("schedule_versions.id"), primary_key=True)
@@ -403,7 +417,30 @@ class Store:
             now = dt.datetime.now()
             s.execute(update(ScheduleVersionRow).where(ScheduleVersionRow.is_active).values(is_active=False))
             sv.approval_status, sv.is_active, sv.approved_at = "APPROVED", True, now
+            run = s.get(RunRow, sv.run_id)
+            s.add(AuditLogRow(
+                at=now, action="APPROVED", schedule_version_id=sv.id,
+                replaced_version_id=None if current is None else current.id,
+                input_version_id=sv.input_version_id, run_id=sv.run_id,
+                details=json.dumps({"total_cost": None if run.total_cost_cents is None else run.total_cost_cents / 100,
+                                    "total_shortage_slots": run.total_shortage_slots,
+                                    "solution_status": run.status})))
             return now, expected_active
+
+    def list_audit(self, *, limit: int | None = None, schedule_version: str | None = None) -> list[dict]:
+        """Recorded changes, newest first (SCRUM-24)."""
+        with Session(self.engine) as s:
+            q = select(AuditLogRow).order_by(AuditLogRow.id.desc())
+            if schedule_version:
+                q = q.where(AuditLogRow.schedule_version_id == _num(schedule_version))
+            if limit:
+                q = q.limit(limit)
+            return [{"entry_id": _code("LOG", r.id), "at": r.at, "action": r.action,
+                     "schedule_version": _code("SV", r.schedule_version_id),
+                     "replaced_version": None if r.replaced_version_id is None else _code("SV", r.replaced_version_id),
+                     "input_version": None if r.input_version_id is None else _code("IN", r.input_version_id),
+                     "run_id": None if r.run_id is None else _code("RUN", r.run_id),
+                     "details": json.loads(r.details or "{}")} for r in s.scalars(q)]
 
     def active_schedule_version(self) -> str | None:
         """The approved, active schedule. Only approve() changes it (SCRUM-37)."""

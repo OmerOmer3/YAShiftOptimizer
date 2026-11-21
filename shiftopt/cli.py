@@ -8,6 +8,7 @@ so the optimizer can be measured in isolation (spec section 9).
     shiftopt validate samples/Input_Small_10.xlsx samples/Output_Small_10.xlsx
     shiftopt export RUN-0001 out.xlsx        (or a schedule version, SV-0001)
     shiftopt approve SV-0001                 (make a draft the active schedule)
+    shiftopt log [--limit 20]                (recorded approvals and changes, newest first)
 
 Exit codes: 0 success, 1 a schedule failed validation, no schedule was produced or an
 approval was refused,
@@ -158,6 +159,20 @@ def _cmd_approve(a) -> int:
     return 0
 
 
+def _cmd_log(a) -> int:
+    entries = Store(a.db).list_audit(limit=a.limit)
+    if not entries:
+        print("No changes recorded yet.")
+        return 0
+    for e in entries:
+        replaced = f" (replaced {e['replaced_version']})" if e["replaced_version"] else ""
+        cost = e["details"].get("total_cost")
+        extra = "" if cost is None else f"  cost {cost:,.2f}, shortage {e['details'].get('total_shortage_slots')}"
+        print(f"{e['entry_id']}  {e['at']:%Y-%m-%d %H:%M:%S}  {e['action']:<9} {e['schedule_version']}{replaced}"
+              f"  {e['run_id'] or ''}{extra}")
+    return 0
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="shiftopt")
     p.add_argument("--db", default="shiftopt.db", help="SQLite file or SQLAlchemy URL (default shiftopt.db)")
@@ -195,6 +210,10 @@ def main(argv=None) -> int:
     pa = sub.add_parser("approve", help="approve a draft so that it becomes the active schedule")
     pa.add_argument("version", help="schedule version, e.g. SV-0001")
     pa.set_defaults(fn=_cmd_approve)
+
+    pl = sub.add_parser("log", help="list recorded approvals and changes, newest first")
+    pl.add_argument("--limit", type=int, default=20)
+    pl.set_defaults(fn=_cmd_log)
 
     a = p.parse_args(argv)
     if a.cmd == "solve" and a.time_budget <= 0:

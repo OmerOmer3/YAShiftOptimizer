@@ -11,7 +11,7 @@ Run it for a chat client over stdio:
 
 Tools are added per story: status and export (SCRUM-32/44); import, solve and run status
 (SCRUM-33); resolving employees, dates and drafts (SCRUM-36);
-employee and coverage queries (SCRUM-34/35); approval (SCRUM-37).
+employee and coverage queries (SCRUM-34/35); approval (SCRUM-37); the change log (SCRUM-24).
 """
 from __future__ import annotations
 
@@ -33,6 +33,8 @@ from shiftopt.export import ExportError, export_run, resolve_run
 from shiftopt.ingest import import_workbook, read_input
 from shiftopt.mcp_server.models import (
     ApprovalResult,
+    AuditEntry,
+    AuditResult,
     ExportResult,
     ImportResult,
     InputIssueOut,
@@ -229,6 +231,26 @@ def build_server(store: Store, *, export_dir: str | Path = "exports") -> MCPServ
                               replaced_version=out.replaced_version, total_cost=out.total_cost,
                               total_shortage_slots=out.total_shortage_slots,
                               active_schedule_version=store.active_schedule_version())
+
+    @mcp.tool(annotations=READ_ONLY)
+    def list_changes(limit: Annotated[int, Field(ge=1, le=200)] = 20,
+                     schedule_version: str | None = None) -> AuditResult:
+        """The record of changes to the schedule, newest first: each approval with its time,
+        the version approved and the version it replaced (later also locks and absences).
+        Optionally only the entries that affected one schedule version (SV-0003 or RUN-0003)."""
+        version = None
+        if schedule_version:
+            try:
+                version = resolve_draft(store, schedule_version)
+            except Unresolved as e:
+                return AuditResult.fail(e.code, e.message, candidates=e.candidates)
+        entries = [AuditEntry(entry_id=e["entry_id"], at=e["at"].isoformat(timespec="seconds"), action=e["action"],
+                              schedule_version=e["schedule_version"], replaced_version=e["replaced_version"],
+                              input_version=e["input_version"], run_id=e["run_id"],
+                              total_cost=e["details"].get("total_cost"),
+                              total_shortage_slots=e["details"].get("total_shortage_slots"))
+                   for e in store.list_audit(limit=limit, schedule_version=version)]
+        return AuditResult(entries=entries)
 
     return mcp
 
