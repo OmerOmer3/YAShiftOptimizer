@@ -17,7 +17,7 @@ Hard rules (spec sections 1-2), all posted as constraints:
 Coverage is counted per 30-minute slot. An employee is active in a slot of his shift
 unless a break covers that slot:
     active[d, s] = sum x[e, t] over shifts covering s  -  sum b[e, t, s'] over breaks covering s
-    shortage[d, s] >= required[d, s] - active[d, s],  shortage >= 0
+    shortage[d, s] = max(0, required[d, s] - active[d, s])   (exact; SCRUM-106)
 Surplus is not modelled: it never offsets shortage elsewhere (spec section 2).
 
 This module only builds the model. Solving in lexicographic stages is in solver.py.
@@ -140,7 +140,12 @@ class ScheduleModel:
                 req = dh.required
                 sv = m.NewIntVar(0, req, f"short[{date},{s}]")
                 active = sum(working[(date, s)]) - sum(on_break[(date, s)])
-                m.Add(sv >= req - active)
+                # Exact, not only a lower bound: shortage = max(0, required - active). With a
+                # lower bound alone a time-limited stage 1 can leave slack in these variables,
+                # and the reported total would exceed the schedule's real shortage (SCRUM-106).
+                gap = m.NewIntVar(req - len(working[(date, s)]), req, f"gap[{date},{s}]")
+                m.Add(gap == req - active)
+                m.AddMaxEquality(sv, [gap, 0])
                 self.shortage[(date, s)] = sv
 
         self.total_shortage = sum(self.shortage.values())

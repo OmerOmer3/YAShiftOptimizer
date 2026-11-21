@@ -123,6 +123,11 @@ def infeasibility_reasons(data: InputData, min_shifts_exempt=frozenset()) -> lis
     return out
 
 
+def _shortage_of(sm: ScheduleModel, solver: cp_model.CpSolver) -> int:
+    """The shortage of the schedule held by `solver` (exact variables, so this is the count)."""
+    return int(sum(solver.Value(v) for v in sm.shortage.values()))
+
+
 def solve(data: InputData, time_budget_s: float, *, workers: int = DEFAULT_WORKERS, seed: int = DEFAULT_SEED,
           min_shifts_exempt: frozenset[str] = frozenset()) -> SolveResult:
     t0 = time.perf_counter()
@@ -174,6 +179,8 @@ def solve(data: InputData, time_budget_s: float, *, workers: int = DEFAULT_WORKE
     coverage_proven = st1 == cp_model.OPTIMAL
     best_schedule = sm.extract(s1)
     best_cost_units = round(sum(s1.Value(v) * c for v, c in _cost_terms(sm)))
+    # Totals are reported from the solution that is returned, never from a bound (SCRUM-106).
+    reported_shortage = _shortage_of(sm, s1)
     cost_proven = False
     stages = [rep1]
 
@@ -192,6 +199,7 @@ def solve(data: InputData, time_budget_s: float, *, workers: int = DEFAULT_WORKE
         if found and round(s2.ObjectiveValue()) <= best_cost_units:
             best_schedule = sm.extract(s2)
             best_cost_units = round(s2.ObjectiveValue())
+            reported_shortage = _shortage_of(sm, s2)
             # Cost is optimal only if it was optimized against the proven best shortage.
             cost_proven = st2 == cp_model.OPTIMAL and coverage_proven
         if found and first is None:
@@ -208,7 +216,7 @@ def solve(data: InputData, time_budget_s: float, *, workers: int = DEFAULT_WORKE
     else:
         reason = f"TIME_LIMIT_COST_NOT_PROVEN (cost stage: {stage2_note})"
     return finish(status=status, schedule=best_schedule, first_feasible_seconds=first,
-                  total_shortage_slots=best_shortage, total_cost=best_cost_units / 100,
+                  total_shortage_slots=reported_shortage, total_cost=best_cost_units / 100,
                   coverage_proven=coverage_proven, cost_proven=cost_proven, termination_reason=reason,
                   stages=stages, model_size=size)
 

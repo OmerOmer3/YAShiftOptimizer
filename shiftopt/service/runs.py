@@ -48,7 +48,15 @@ def run_initial(store: Store, time_budget_s: float, *, input_version: str | None
     if result.schedule is not None:
         report = validate(data, result.schedule, group_size=GROUP_SIZE)
         passed = report.passed
-        if passed:
+        engine = (result.total_shortage_slots, round(result.total_cost or 0, 2))
+        checker = (report.metrics.total_shortage_slots, round(report.metrics.total_cost, 2))
+        if passed and engine != checker:
+            # Valid schedule, wrong totals: a bug in our engine. Never store numbers the
+            # independent checker does not confirm (SCRUM-106).
+            status, reason = "ERROR", "METRICS_MISMATCH"
+            diagnostics.append(f"Engine totals (shortage {engine[0]}, cost {engine[1]:,.2f}) differ from the "
+                               f"independent checker (shortage {checker[0]}, cost {checker[1]:,.2f}).")
+        elif passed:
             schedule = result.schedule
         else:
             # A schedule the checker rejects is a bug in our code, not a property of the week.
