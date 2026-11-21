@@ -414,6 +414,8 @@ class Store:
                 raise StaleState("ACTIVE_CHANGED")
             if sv.approval_status != "DRAFT":
                 raise StaleState("ALREADY_APPROVED")
+            if sv.base_version_id is not None and (current is None or current.id != sv.base_version_id):
+                raise StaleState("BASE_VERSION_STALE")
             now = dt.datetime.now()
             s.execute(update(ScheduleVersionRow).where(ScheduleVersionRow.is_active).values(is_active=False))
             sv.approval_status, sv.is_active, sv.approved_at = "APPROVED", True, now
