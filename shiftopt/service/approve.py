@@ -4,11 +4,11 @@
 version." Before approving, the server checks that the input the draft is based on is
 still current and that the schedule passes the independent checker; the language
 model's opinion is never relied on. Approval is the only operation that changes the
-active schedule; it runs in one transaction and records the time.
+active schedule; it runs in one transaction that also writes the audit-log entry
+(SCRUM-24), so there is no approval without a record.
 
-Checks that belong to other stories:
-  * BASE_VERSION_STALE for repair drafts whose base is no longer active: SCRUM-38;
-  * the audit-log entry for each approval: SCRUM-24.
+Left for another story:
+  * BASE_VERSION_STALE for repair drafts whose base is no longer active: SCRUM-38.
 """
 from __future__ import annotations
 

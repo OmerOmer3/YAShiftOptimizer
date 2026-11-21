@@ -39,6 +39,9 @@ shiftopt export RUN-0001 Schedule.xlsx
 
 # Approve a draft: the only operation that changes the active schedule
 shiftopt approve SV-0001
+
+# The record of approvals (and, from sprint 4, locks and absences), newest first
+shiftopt log
 ```
 
 ## Chat client (MCP)
@@ -64,7 +67,7 @@ Claude Desktop: Settings → Developer → Edit Config, then add (use absolute p
 ```
 
 On Windows the command is `C:\path\to\.venv\Scripts\shiftopt-mcp.exe`. Restart the client after editing.
-Tools so far: `get_system_status`, `import_input`, `create_schedule`, `get_run_status`, `resolve_reference`, `approve_draft`, `export_schedule` (more are added per story in sprint 3). A solve runs on a worker thread, so the server stays responsive.
+Tools so far: `get_system_status`, `import_input`, `create_schedule`, `get_run_status`, `resolve_reference`, `approve_draft`, `list_changes`, `export_schedule` (more are added per story in sprint 3). A solve runs on a worker thread, so the server stays responsive.
 Every number the assistant reports comes from a tool result; business errors come back as
 `{"ok": false, "error": {"code", "message", "candidates"}}` so the assistant can ask the manager.
 

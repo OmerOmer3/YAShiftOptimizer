@@ -135,3 +135,19 @@ class ApprovalResult(ToolResult):
     total_shortage_slots: int | None = None
     active_schedule_version: str | None = Field(None, description="The active schedule after this call")
     details: list[str] = Field(default_factory=list, description="Checker violations when VALIDATION_FAILED")
+
+
+class AuditEntry(BaseModel):
+    entry_id: str
+    at: str = Field(description="ISO time of the change")
+    action: str = Field(description="APPROVED; in sprint 4 also LOCKED, UNLOCKED, ABSENCE_REPORTED")
+    schedule_version: str = Field(description="The schedule version the change affected")
+    replaced_version: str | None = Field(description="For APPROVED: the schedule that was active before")
+    input_version: str | None
+    run_id: str | None
+    total_cost: float | None = None
+    total_shortage_slots: int | None = None
+
+
+class AuditResult(ToolResult):
+    entries: list[AuditEntry] = Field(default_factory=list, description="Newest first")
