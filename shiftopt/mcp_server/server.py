@@ -37,6 +37,8 @@ from shiftopt.mcp_server.models import (
     AuditResult,
     CoverageResult,
     DayOut,
+    EmployeeResult,
+    EmployeeShiftOut,
     ExportResult,
     ImportResult,
     InputIssueOut,
@@ -50,6 +52,7 @@ from shiftopt.mcp_server.models import (
 from shiftopt.service import NoActiveInput, run_initial
 from shiftopt.service.approve import ApprovalRefused, approve_draft as approve_service
 from shiftopt.service.queries import get_coverage as coverage_service
+from shiftopt.service.queries import get_employee as employee_service
 from shiftopt.service.resolve import Unresolved, date_label, resolve_date, resolve_draft, resolve_employee
 
 MAX_TIME_BUDGET_S = 3600
@@ -288,6 +291,29 @@ def build_server(store: Store, *, export_dir: str | Path = "exports") -> MCPServ
             day_shifts=[ShiftOut(employee_id=x.employee_id, name=x.name, shift_id=x.shift_id, start=x.start,
                                  end=x.end, breaks=x.breaks, paid_hours=x.paid_hours, cost=x.cost)
                         for x in r.day_shifts])
+
+    @mcp.tool(annotations=READ_ONLY)
+    def get_employee_schedule(employee: str, ref: str | None = None) -> EmployeeResult:
+        """One employee's week: every shift with its date, times and breaks, paid hours and
+        cost per shift and in total, preferred shift start, unavailable dates and whether the
+        employee is exempt from the minimum number of shifts. Use this for 'how many hours
+        does <employee> have' or 'when does <employee> work'. employee: an ID ('E003', 'E3',
+        '3') or a name, resolved by the server; AMBIGUOUS or NOT_FOUND come with candidates:
+        ask which. ref: a schedule version or run; empty means the active schedule, or the
+        only draft if nothing is active. The answer says which version it is about."""
+        try:
+            info, r = employee_service(store, employee, ref)
+        except Unresolved as e:
+            return EmployeeResult.fail(e.code, e.message, candidates=e.candidates)
+        return EmployeeResult(
+            schedule_version=info["schedule_version"], approval_status=info["approval_status"],
+            is_active=info["is_active"], employee_id=r.employee_id, name=r.name, shift_count=r.shift_count,
+            paid_hours=r.paid_hours, total_cost=r.total_cost, preferred_start=r.preferred_start,
+            preferred_count=r.preferred_count, preference_rate=r.preference_rate,
+            min_shifts_exempt=r.min_shifts_exempt, unavailable_dates=r.unavailable_dates,
+            shifts=[EmployeeShiftOut(date=x.date.isoformat(), weekday=x.weekday, shift_id=x.shift_id, start=x.start,
+                                     end=x.end, breaks=x.breaks, paid_hours=x.paid_hours, cost=x.cost,
+                                     is_locked=x.is_locked) for x in r.shifts])
 
     return mcp
 

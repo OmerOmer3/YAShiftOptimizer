@@ -1,6 +1,6 @@
 """Read-only questions about a schedule version, answered from the independent checker's
 metrics (spec section 4: numeric answers come from the tools). SCRUM-35 coverage and cost;
-SCRUM-34 adds the employee view.
+SCRUM-34 one employee's shifts, hours and cost.
 
 Which version: the one named, else the active (approved) schedule, else the only draft of
 the current input; several drafts and no active schedule is AMBIGUOUS. Days and employees
@@ -14,7 +14,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 
 from shiftopt.domain import InputData, Schedule
-from shiftopt.service.resolve import Unresolved, resolve_date, resolve_draft
+from shiftopt.service.resolve import Unresolved, resolve_date, resolve_draft, resolve_employee
 from shiftopt.validator.metrics import compute_metrics
 
 _WEEKDAY = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -123,3 +123,58 @@ def get_coverage(store, ref: str | None = None, day_text: str | None = None) -> 
     day = resolve_date(data, day_text) if day_text else None
     run = store.get_run(info["run_id"])
     return info, coverage_report(data, store.load_schedule(version), group_size=run.group_size, day=day)
+
+
+@dataclass
+class EmployeeShift:
+    date: dt.date
+    weekday: str
+    shift_id: str
+    start: str
+    end: str
+    breaks: list[str]
+    paid_hours: float
+    cost: float
+    is_locked: bool
+
+
+@dataclass
+class EmployeeReport:
+    employee_id: str
+    name: str
+    shift_count: int
+    paid_hours: float
+    total_cost: float
+    preferred_start: str | None
+    preferred_count: int | None      # empty for a pair team (spec section 8)
+    preference_rate: float | None
+    min_shifts_exempt: bool
+    unavailable_dates: list[str]     # from the input, within the planning week
+    shifts: list[EmployeeShift]
+
+
+def employee_report(data: InputData, schedule: Schedule, employee_text: str, *, group_size: int) -> EmployeeReport:
+    eid = resolve_employee(data, employee_text)
+    m = compute_metrics(data, schedule, group_size=group_size)
+    row = next(e for e in m.employees if e.employee_id == eid)
+    emp = data.employees[eid]
+    shifts = [EmployeeShift(a.date, _WEEKDAY[a.date.weekday()], a.shift_id, hhmm(a.start), hhmm(a.end),
+                            [f"{hhmm(b.start)}-{hhmm(b.end)}" for b in a.breaks], a.paid_hours, a.cost,
+                            bool(a.is_locked))
+              for a in sorted(schedule.assignments, key=lambda a: a.date) if a.employee_id == eid]
+    return EmployeeReport(
+        employee_id=eid, name=emp.name, shift_count=row.shift_count, paid_hours=row.paid_hours,
+        total_cost=round(row.total_cost, 2),
+        preferred_start=None if row.preferred_start is None else hhmm(row.preferred_start),
+        preferred_count=row.preferred_count, preference_rate=row.preference_rate,
+        min_shifts_exempt=bool(row.min_shifts_exempt),
+        unavailable_dates=sorted(data.date_for_day(d).isoformat() for d in emp.unavailable_days),
+        shifts=shifts)
+
+
+def get_employee(store, employee_text: str, ref: str | None = None) -> tuple[dict, EmployeeReport]:
+    version = target_version(store, ref)
+    info = store.schedule_version_info(version)
+    data = store.load_input(info["input_version"])
+    run = store.get_run(info["run_id"])
+    return info, employee_report(data, store.load_schedule(version), employee_text, group_size=run.group_size)
