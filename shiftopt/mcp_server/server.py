@@ -35,16 +35,21 @@ from shiftopt.mcp_server.models import (
     ApprovalResult,
     AuditEntry,
     AuditResult,
+    CoverageResult,
+    DayOut,
     ExportResult,
     ImportResult,
     InputIssueOut,
     ResolveResult,
     RunResult,
+    ShiftOut,
+    SlotOut,
     SystemStatus,
     brief,
 )
 from shiftopt.service import NoActiveInput, run_initial
 from shiftopt.service.approve import ApprovalRefused, approve_draft as approve_service
+from shiftopt.service.queries import get_coverage as coverage_service
 from shiftopt.service.resolve import Unresolved, date_label, resolve_date, resolve_draft, resolve_employee
 
 MAX_TIME_BUDGET_S = 3600
@@ -251,6 +256,38 @@ def build_server(store: Store, *, export_dir: str | Path = "exports") -> MCPServ
                               total_shortage_slots=e["details"].get("total_shortage_slots"))
                    for e in store.list_audit(limit=limit, schedule_version=version)]
         return AuditResult(entries=entries)
+
+    @mcp.tool(annotations=READ_ONLY)
+    def get_coverage(ref: str | None = None, day: str | None = None) -> CoverageResult:
+        """Where a schedule is understaffed and what it costs: total shortage (half-hours and
+        hours), surplus and cost; shortage, surplus and cost per day; every understaffed
+        half-hour. With day (a date or a day name such as 'Wednesday' or 'רביעי'): also every
+        half-hour of that day and who works that day, with shifts and breaks. Use this for
+        'what is planned on <day>'. Days outside the planning week are refused with the valid
+        dates. ref: a schedule version or run; empty means the active schedule, or the only
+        draft if nothing is active (AMBIGUOUS if several: ask which)."""
+        try:
+            info, r = coverage_service(store, ref, day)
+        except Unresolved as e:
+            return CoverageResult.fail(e.code, e.message, candidates=e.candidates)
+
+        def slot(x):
+            return SlotOut(date=x.date.isoformat(), slot_start=x.slot_start, slot_end=x.slot_end,
+                           required=x.required, assigned=x.assigned, shortage=x.shortage, surplus=x.surplus)
+        return CoverageResult(
+            schedule_version=info["schedule_version"], approval_status=info["approval_status"],
+            is_active=info["is_active"], total_shortage_slots=r.total_shortage_slots,
+            total_shortage_hours=r.total_shortage_hours, total_surplus_slots=r.total_surplus_slots,
+            total_cost=r.total_cost,
+            days=[DayOut(date=d.date.isoformat(), weekday=d.weekday, required_slots=d.required_slots,
+                         shortage_slots=d.shortage_slots, surplus_slots=d.surplus_slots, cost=d.cost,
+                         shift_count=d.shift_count) for d in r.days],
+            shortage_slots=[slot(x) for x in r.shortage_slots],
+            day=None if r.day is None else r.day.isoformat(),
+            day_slots=[slot(x) for x in r.day_slots],
+            day_shifts=[ShiftOut(employee_id=x.employee_id, name=x.name, shift_id=x.shift_id, start=x.start,
+                                 end=x.end, breaks=x.breaks, paid_hours=x.paid_hours, cost=x.cost)
+                        for x in r.day_shifts])
 
     return mcp
 

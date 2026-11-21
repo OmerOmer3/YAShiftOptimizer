@@ -151,3 +151,49 @@ class AuditEntry(BaseModel):
 
 class AuditResult(ToolResult):
     entries: list[AuditEntry] = Field(default_factory=list, description="Newest first")
+
+
+class SlotOut(BaseModel):
+    date: str
+    slot_start: str
+    slot_end: str
+    required: int
+    assigned: int = Field(description="Employees working and not on a break")
+    shortage: int
+    surplus: int
+
+
+class DayOut(BaseModel):
+    date: str
+    weekday: str
+    required_slots: int = Field(description="Sum of required employees over the day's half-hours")
+    shortage_slots: int
+    surplus_slots: int
+    cost: float
+    shift_count: int
+
+
+class ShiftOut(BaseModel):
+    employee_id: str
+    name: str
+    shift_id: str
+    start: str
+    end: str
+    breaks: list[str]
+    paid_hours: float
+    cost: float
+
+
+class CoverageResult(ToolResult):
+    schedule_version: str | None = None
+    approval_status: str | None = None
+    is_active: bool | None = None
+    total_shortage_slots: int | None = Field(None, description="Missing employee half-hours over the week")
+    total_shortage_hours: float | None = Field(None, description="total_shortage_slots / 2")
+    total_surplus_slots: int | None = None
+    total_cost: float | None = None
+    days: list[DayOut] = Field(default_factory=list)
+    shortage_slots: list[SlotOut] = Field(default_factory=list, description="Every half-hour with a shortage")
+    day: str | None = Field(None, description="The day asked about, if any")
+    day_slots: list[SlotOut] = Field(default_factory=list, description="All half-hours of that day")
+    day_shifts: list[ShiftOut] = Field(default_factory=list, description="Who works that day")
