@@ -12,7 +12,7 @@ Run it for a chat client over stdio:
 Tools are added per story: status and export (SCRUM-32/44); import, solve and run status
 (SCRUM-33); resolving employees, dates and drafts (SCRUM-36);
 employee and coverage queries (SCRUM-34/35); approval (SCRUM-37); the change log (SCRUM-24);
-locking and unlocking a future shift (SCRUM-39); reporting an absence (SCRUM-40).
+locking and unlocking a future shift (SCRUM-39); reporting an absence (SCRUM-40); repairing it with a single replacement (SCRUM-41).
 """
 from __future__ import annotations
 
@@ -47,6 +47,8 @@ from shiftopt.mcp_server.models import (
     ImportResult,
     InputIssueOut,
     LockResult,
+    RepairResult,
+    ReplacementOut,
     ResolveResult,
     RunResult,
     ShiftOut,
@@ -58,6 +60,7 @@ from shiftopt.service import NoActiveInput, run_initial
 from shiftopt.service.approve import ApprovalRefused, approve_draft as approve_service
 from shiftopt.service.absence import AbsenceRefused, report_absence as absence_service
 from shiftopt.service.locks import LockRefused, set_lock
+from shiftopt.service.repair import run_repair
 from shiftopt.service.queries import get_coverage as coverage_service
 from shiftopt.service.queries import get_employee as employee_service
 from shiftopt.service.resolve import Unresolved, date_label, resolve_date, resolve_draft, resolve_employee
@@ -77,7 +80,8 @@ Rules for the assistant:
 - Creating a schedule makes a DRAFT. Nothing becomes the active schedule until the manager explicitly approves it.
   Call approve_draft only when the manager has clearly asked to approve that draft; never on your own initiative.
 - When the manager reports that an employee will be absent, call report_absence. It records the absence only; the
-  active schedule does not change until a repair draft is approved.
+  active schedule does not change until a repair draft is approved. Then call repair_schedule to propose the repair,
+  and show the manager who replaces whom and the draft's numbers before asking whether to approve it.
 - Lock or unlock a shift only when the manager asks to. Locks belong to shifts of the active (approved) schedule
   that have not started; a locked shift is kept as it is by every later repair.
 - An empty value means 'not available', not zero; say so instead of reporting 0.
@@ -394,6 +398,36 @@ def build_server(store: Store, *, export_dir: str | Path = "exports") -> MCPServ
                              was_locked=out.was_locked if out.absence_id else None,
                              min_shifts_exempt=True if out.absence_id else None,
                              schedule_version=out.schedule_version, message=out.message)
+
+    @mcp.tool(annotations=CREATES)
+    async def repair_schedule(
+        time_budget_seconds: Annotated[float, Field(gt=0, le=MAX_TIME_BUDGET_S,
+                                                    description="Total seconds for all repair stages")] = 30,
+        workers: Annotated[int, Field(ge=1, le=64)] = DEFAULT_WORKERS,
+        seed: int = DEFAULT_SEED,
+    ) -> RepairResult:
+        """Propose a repair of the active schedule for the reported absences (report_absence first).
+        First one available employee takes the same shift, keeping every rule, with started,
+        completed and locked shifts unchanged; breaks of other future shifts may move. The result
+        is checked by the independent checker and saved as a REPAIR draft; the active schedule
+        changes only when the manager approves it. If no single replacement exists, nothing is
+        saved and the message says so."""
+        active = store.active_schedule_version()
+        try:
+            out = await anyio.to_thread.run_sync(
+                partial(run_repair, store, time_budget_seconds, workers=workers, seed=seed))
+        except AbsenceRefused as e:
+            return RepairResult.fail(e.code, e.message, active_schedule_version=active)
+        data = store.load_input(out.start.input_version)
+        return RepairResult(
+            run=None if out.run is None else brief(out.run),
+            replacements=[ReplacementOut(absent_employee=r.absent_employee, date=r.date.isoformat(),
+                                         shift_id=r.shift_id, replacement_employee=r.replacement_employee,
+                                         replacement_name=data.employees[r.replacement_employee].name)
+                          for r in out.replacements],
+            moved_breaks=out.moved_breaks,
+            open_absences=[f"{a['absence_id']} {a['employee_id']} {a['date'].isoformat()}" for a in out.start.absences],
+            active_schedule_version=store.active_schedule_version(), message=out.message)
 
     return mcp
 

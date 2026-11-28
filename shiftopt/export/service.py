@@ -77,7 +77,7 @@ def export_run(store: Store, ref: str, path: str | Path) -> Path:
         "ChangedAssignments": changed,
         "CoverageOptimalityProven": run.coverage_proven, "CostOptimalityProven": run.cost_proven,
         # Stability is an objective of repair runs only, preference of triples only (spec section 8).
-        "StabilityOptimalityProven": None,
+        "StabilityOptimalityProven": run.stability_proven if run.run_type == "REPAIR" else None,
         "PreferenceOptimalityProven": None,
         "TerminationReason": run.termination_reason, "ValidationPassed": run.validation_passed,
     }

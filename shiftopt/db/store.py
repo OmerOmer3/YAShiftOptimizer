@@ -125,6 +125,8 @@ class RunRow(Base):
     total_cost_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
     coverage_proven: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     cost_proven: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # Repair runs only: whether the number of changed (employee, date) pairs was proven minimal.
+    stability_proven: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     validation_passed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     solver_info: Mapped[str] = mapped_column(Text)   # JSON: version, workers, seed, hardware
     diagnostics: Mapped[str] = mapped_column(Text)   # JSON list of messages for the manager
@@ -239,6 +241,12 @@ class RunRecord:
     schedule_version: str | None
     approval_status: str | None
     base_schedule_version: str | None
+    stability_proven: bool | None = None
+
+
+# Columns added after a release, with their SQL type: added to an existing database file on
+# start, so a database created by an earlier version keeps working (SQLite only).
+_ADDED_COLUMNS = {"runs": {"stability_proven": "BOOLEAN"}}
 
 
 class Store:
@@ -251,6 +259,16 @@ class Store:
             # SQLite enforces foreign keys only when asked to.
             event.listen(self.engine, "connect", lambda conn, _: conn.execute("PRAGMA foreign_keys=ON"))
         Base.metadata.create_all(self.engine)
+        if url.startswith("sqlite"):
+            self._add_missing_columns()
+
+    def _add_missing_columns(self) -> None:
+        with self.engine.begin() as conn:
+            for table, cols in _ADDED_COLUMNS.items():
+                have = {row[1] for row in conn.exec_driver_sql(f"PRAGMA table_info({table})")}
+                for name, sql_type in cols.items():
+                    if name not in have:
+                        conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}")
 
     # ================================================================ input versions
     def save_input_version(self, data: InputData) -> str:
@@ -310,7 +328,8 @@ class Store:
     def save_run(self, *, input_version: str, run_type: str, group_size: int, result, validation_passed: bool | None,
                  optimization_seconds: float, started_at: dt.datetime, status: str | None = None,
                  termination_reason: str | None = None, diagnostics: list[str] | None = None,
-                 schedule: Schedule | None = None, base_version: str | None = None) -> tuple[str, str | None]:
+                 schedule: Schedule | None = None, base_version: str | None = None,
+                 stability_proven: bool | None = None) -> tuple[str, str | None]:
         """Store one run and, if it produced a schedule, a new DRAFT schedule version.
         Returns (run_id, schedule_version or None). The active schedule is never touched."""
         with Session(self.engine) as s, s.begin():
@@ -322,6 +341,7 @@ class Store:
                 total_shortage_slots=result.total_shortage_slots,
                 total_cost_cents=None if result.total_cost is None else cents(result.total_cost),
                 coverage_proven=result.coverage_proven, cost_proven=result.cost_proven,
+                stability_proven=stability_proven,
                 validation_passed=validation_passed, solver_info=json.dumps(result.solver_info),
                 diagnostics=json.dumps(diagnostics if diagnostics is not None else result.diagnostics),
                 started_at=started_at)
@@ -369,7 +389,8 @@ class Store:
             diagnostics=json.loads(run.diagnostics), started_at=run.started_at,
             schedule_version=None if sv is None else _code("SV", sv.id),
             approval_status=None if sv is None else sv.approval_status,
-            base_schedule_version=None if sv is None or sv.base_version_id is None else _code("SV", sv.base_version_id))
+            base_schedule_version=None if sv is None or sv.base_version_id is None else _code("SV", sv.base_version_id),
+            stability_proven=run.stability_proven)
 
     def load_schedule(self, version: str) -> Schedule | None:
         with Session(self.engine) as s:

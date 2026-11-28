@@ -68,6 +68,8 @@ class RunBrief(BaseModel):
     diagnostics: list[str] = Field(default_factory=list,
                                    description="Plain-language reasons, e.g. why a week has no solution")
     solver_info: dict = Field(default_factory=dict, description="Solver version, threads, seed and machine")
+    base_schedule_version: str | None = Field(None, description="Repair runs: the schedule this repair is based on")
+    stability_proven: bool | None = Field(None, description="Repair runs: number of changes proven minimal")
 
 
 class SystemStatus(ToolResult):
@@ -100,7 +102,8 @@ def brief(run) -> RunBrief:
         first_feasible_seconds=None if run.first_feasible_seconds is None else round(run.first_feasible_seconds, 3),
         optimization_seconds=round(run.optimization_seconds, 3),
         schedule_version=run.schedule_version, approval_status=run.approval_status,
-        diagnostics=list(run.diagnostics), solver_info=dict(run.solver_info))
+        diagnostics=list(run.diagnostics), solver_info=dict(run.solver_info),
+        base_schedule_version=run.base_schedule_version, stability_proven=run.stability_proven)
 
 
 class InputIssueOut(BaseModel):
@@ -269,3 +272,20 @@ class AbsenceResult(ToolResult):
                                                              "this week")
     schedule_version: str | None = Field(None, description="The active schedule, unchanged by the report")
     message: str | None = Field(None, description="What happened, in one or two sentences for the manager")
+
+
+class ReplacementOut(BaseModel):
+    absent_employee: str
+    date: str
+    shift_id: str
+    replacement_employee: str
+    replacement_name: str
+
+
+class RepairResult(ToolResult):
+    run: RunBrief | None = Field(None, description="The repair run; empty when no single replacement exists")
+    replacements: list[ReplacementOut] = Field(default_factory=list)
+    moved_breaks: int | None = Field(None, description="Breaks of other shifts moved (not counted as changes)")
+    open_absences: list[str] = Field(default_factory=list, description="The absences this repair answers")
+    active_schedule_version: str | None = Field(None, description="Unchanged until a repair draft is approved")
+    message: str | None = None
