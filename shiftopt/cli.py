@@ -14,6 +14,7 @@ so the optimizer can be measured in isolation (spec section 9).
     shiftopt absence E003 Wednesday          (report a full-day absence; the shift is removed in the repair)
     shiftopt absences                        (reported absences and whether a repair was approved)
     shiftopt repair --time-budget 30         (propose a repair draft for the open absences)
+    shiftopt compare SV-0002                 (what a draft changes, and shortage and cost before and after)
     shiftopt --now 2026-11-03T07:00 ...      (fixed current time for demos; default: the computer's clock)
 
 Exit codes: 0 success, 1 a schedule failed validation, no schedule was produced or an
@@ -34,6 +35,7 @@ from shiftopt.ingest.schedule_reader import read_schedule
 from shiftopt.service import ApprovalRefused, NoActiveInput, approve_draft, run_initial
 from shiftopt.service.absence import AbsenceRefused, report_absence
 from shiftopt.service.locks import LockRefused, set_lock
+from shiftopt.service.compare import compare
 from shiftopt.service.repair import run_repair
 from shiftopt.service.resolve import Unresolved, resolve_date, resolve_employee
 from shiftopt.validator import validate
@@ -253,6 +255,31 @@ def _cmd_repair(a) -> int:
     return 0 if out.run.schedule_version else 1
 
 
+def _cmd_compare(a) -> int:
+    try:
+        c = compare(Store(a.db), a.ref)
+    except Unresolved as e:
+        print(f"REFUSED  {e.code}: {e.message}")
+        if e.candidates:
+            print("  choices: " + ", ".join(e.candidates))
+        return 1
+    print(f"{c.draft} ({c.run_type}, {c.draft_status}) compared with {c.compared_with or 'nothing'}")
+    if c.note:
+        print(c.note)
+    if c.before:
+        print(f"{'':<16}{'before':>12}{'after':>12}")
+        print(f"{'Shortage slots':<16}{c.before.shortage_slots:>12}{c.after.shortage_slots:>12}")
+        print(f"{'Cost':<16}{c.before.cost:>12,.2f}{c.after.cost:>12,.2f}")
+        print(f"{'Shifts':<16}{c.before.shifts:>12}{c.after.shifts:>12}")
+        print(f"ChangedAssignments {c.diff.changed_assignments}")
+        for x in c.diff.changes:
+            print(f"  {x.kind:<17}{x.employee_id:<8}{x.date.isoformat()}  {x.before or '-':<18} -> {x.after or '-'}")
+        for x in c.diff.break_moves:
+            print(f"  {'BREAK_MOVED':<17}{x.employee_id:<8}{x.date.isoformat()}  {', '.join(x.before)} -> "
+                  f"{', '.join(x.after)} (not counted)")
+    return 0
+
+
 def _cmd_absences(a) -> int:
     rows = Store(a.db).list_absences()
     if not rows:
@@ -325,6 +352,10 @@ def main(argv=None) -> int:
     prp.add_argument("--workers", type=int, default=DEFAULT_WORKERS)
     prp.add_argument("--seed", type=int, default=DEFAULT_SEED)
     prp.set_defaults(fn=_cmd_repair)
+
+    pcm = sub.add_parser("compare", help="compare a draft with the schedule it would replace")
+    pcm.add_argument("ref", nargs="?", default=None, help="SV-0002, RUN-0002, 'latest' (default: the draft)")
+    pcm.set_defaults(fn=_cmd_compare)
 
     pal = sub.add_parser("absences", help="list reported absences")
     pal.set_defaults(fn=_cmd_absences)

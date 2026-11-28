@@ -52,6 +52,9 @@ shiftopt absences
 # otherwise re-optimize future shifts (shortage, then changes, then cost)
 shiftopt repair --time-budget 30
 
+# What a draft changes compared with the schedule it would replace, and shortage and cost before and after
+shiftopt compare SV-0002
+
 # The record of approvals, locks, unlocks and reported absences, newest first
 shiftopt log
 ```
@@ -90,7 +93,7 @@ Claude Desktop: Settings → Developer → Edit Config, then add (use absolute p
 
 On Windows the command is `C:\path\to\.venv\Scripts\shiftopt-mcp.exe`. Restart the client after editing.
 The `env` line fixes the server's current time for a demo with the sample files; leave it out to use the clock.
-Tools so far: `get_system_status` (also shows the current time the server uses), `import_input`, `create_schedule`, `get_run_status`, `resolve_reference`, `approve_draft`, `list_changes`, `get_coverage`, `get_employee_schedule`, `export_schedule`, `lock_shift`, `unlock_shift`, `report_absence`, `repair_schedule` (a single replacement for the same shift, or else re-optimized future shifts). `get_system_status` also lists open absences. A solve runs on a worker thread, so the server stays responsive.
+Tools so far: `get_system_status` (also shows the current time the server uses), `import_input`, `create_schedule`, `get_run_status`, `resolve_reference`, `approve_draft`, `list_changes`, `get_coverage`, `get_employee_schedule`, `export_schedule`, `lock_shift`, `unlock_shift`, `report_absence`, `repair_schedule` (a single replacement for the same shift, or else re-optimized future shifts), `compare_draft` (the changes and the numbers before and after). `get_system_status` also lists open absences. A solve runs on a worker thread, so the server stays responsive.
 Every number the assistant reports comes from a tool result; business errors come back as
 `{"ok": false, "error": {"code", "message", "candidates"}}` so the assistant can ask the manager.
 

@@ -19,12 +19,10 @@ class ExportError(Exception):
 
 
 def changed_assignments(base: Schedule, new: Schedule) -> int:
-    """Employee-and-date pairs whose shift differs between the base version and the new one:
-    added, removed, or moved to another shift template or time."""
-    def key(s):
-        return {(a.employee_id, a.date): (a.shift_id, a.start, a.end) for a in s.assignments}
-    b, n = key(base), key(new)
-    return sum(1 for k in b.keys() | n.keys() if b.get(k) != n.get(k))
+    """Changed (employee, date) pairs between the base version and the new one (spec section 3):
+    added, removed, or moved to another shift template. Break-only moves are not counted."""
+    from shiftopt.service.compare import diff_schedules
+    return diff_schedules(base, new).changed_assignments
 
 
 def _instructions(run, has_schedule: bool) -> list[tuple[str, str]]:
