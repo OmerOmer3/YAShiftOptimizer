@@ -292,3 +292,58 @@ class RepairResult(ToolResult):
     open_absences: list[str] = Field(default_factory=list, description="The absences this repair answers")
     active_schedule_version: str | None = Field(None, description="Unchanged until a repair draft is approved")
     message: str | None = None
+
+
+class TotalsOut(BaseModel):
+    shortage_slots: int = Field(description="Half-hours of missing employees")
+    shortage_hours: float
+    surplus_slots: int
+    cost: float
+    shifts: int
+    paid_hours: float
+
+
+class ChangeOut(BaseModel):
+    employee_id: str
+    name: str
+    date: str
+    weekday: str
+    kind: str = Field(description="REMOVED, ADDED or TEMPLATE_CHANGED (each counts as one change)")
+    before: str | None = Field(description="Shift before, e.g. 'S4 08:00-12:00'; empty if there was none")
+    after: str | None = Field(description="Shift after; empty if removed")
+
+
+class BreakMoveOut(BaseModel):
+    employee_id: str
+    name: str
+    date: str
+    shift_id: str
+    before: list[str]
+    after: list[str]
+
+
+class DayDeltaOut(BaseModel):
+    date: str
+    weekday: str
+    shortage_before: int
+    shortage_after: int
+    cost_before: float
+    cost_after: float
+
+
+class CompareResult(ToolResult):
+    draft: str | None = None
+    draft_status: str | None = None
+    run_type: str | None = Field(None, description="INITIAL or REPAIR")
+    compared_with: str | None = Field(None, description="The base of a repair draft, otherwise the active schedule")
+    compared_with_is_active: bool | None = None
+    before: TotalsOut | None = Field(None, description="Numbers of the schedule the draft would replace")
+    after: TotalsOut | None = Field(None, description="Numbers of the draft")
+    changed_assignments: int | None = Field(None, description="Changed (employee, date) pairs (ChangedAssignments)")
+    changes: list[ChangeOut] = Field(default_factory=list)
+    break_moves: list[BreakMoveOut] = Field(default_factory=list,
+                                            description="Breaks moved within the same shift: listed, not counted")
+    days: list[DayDeltaOut] = Field(default_factory=list, description="Only the days whose shortage or cost moved")
+    min_shifts_exempt: list[str] = Field(default_factory=list)
+    open_absences: list[str] = Field(default_factory=list)
+    note: str | None = None

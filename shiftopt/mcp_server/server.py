@@ -12,7 +12,8 @@ Run it for a chat client over stdio:
 Tools are added per story: status and export (SCRUM-32/44); import, solve and run status
 (SCRUM-33); resolving employees, dates and drafts (SCRUM-36);
 employee and coverage queries (SCRUM-34/35); approval (SCRUM-37); the change log (SCRUM-24);
-locking and unlocking a future shift (SCRUM-39); reporting an absence (SCRUM-40); repairing it with a single replacement (SCRUM-41) or by re-optimizing future shifts (SCRUM-42).
+locking and unlocking a future shift (SCRUM-39); reporting an absence (SCRUM-40); repairing it with a single replacement (SCRUM-41) or by re-optimizing future shifts (SCRUM-42);
+comparing a draft with the schedule it would replace (SCRUM-43).
 """
 from __future__ import annotations
 
@@ -39,7 +40,11 @@ from shiftopt.mcp_server.models import (
     ApprovalResult,
     AuditEntry,
     AuditResult,
+    BreakMoveOut,
+    ChangeOut,
+    CompareResult,
     CoverageResult,
+    DayDeltaOut,
     DayOut,
     EmployeeResult,
     EmployeeShiftOut,
@@ -54,10 +59,12 @@ from shiftopt.mcp_server.models import (
     ShiftOut,
     SlotOut,
     SystemStatus,
+    TotalsOut,
     brief,
 )
 from shiftopt.service import NoActiveInput, run_initial
 from shiftopt.service.approve import ApprovalRefused, approve_draft as approve_service
+from shiftopt.service.compare import compare as compare_service
 from shiftopt.service.absence import AbsenceRefused, report_absence as absence_service
 from shiftopt.service.locks import LockRefused, set_lock
 from shiftopt.service.repair import run_repair
@@ -80,8 +87,10 @@ Rules for the assistant:
 - Creating a schedule makes a DRAFT. Nothing becomes the active schedule until the manager explicitly approves it.
   Call approve_draft only when the manager has clearly asked to approve that draft; never on your own initiative.
 - When the manager reports that an employee will be absent, call report_absence. It records the absence only; the
-  active schedule does not change until a repair draft is approved. Then call repair_schedule to propose the repair,
-  and show the manager who replaces whom and the draft's numbers before asking whether to approve it.
+  active schedule does not change until a repair draft is approved. Then call repair_schedule to propose the repair.
+- Before asking the manager whether to approve a draft that would replace an active schedule, call compare_draft and
+  show what changes (each changed employee and day, moved breaks separately) and the shortage and cost before and
+  after.
 - Lock or unlock a shift only when the manager asks to. Locks belong to shifts of the active (approved) schedule
   that have not started; a locked shift is kept as it is by every later repair.
 - An empty value means 'not available', not zero; say so instead of reporting 0.
@@ -430,6 +439,41 @@ def build_server(store: Store, *, export_dir: str | Path = "exports") -> MCPServ
             moved_breaks=out.moved_breaks,
             open_absences=[f"{a['absence_id']} {a['employee_id']} {a['date'].isoformat()}" for a in out.start.absences],
             active_schedule_version=store.active_schedule_version(), message=out.message)
+
+    @mcp.tool(annotations=READ_ONLY)
+    def compare_draft(ref: str | None = None) -> CompareResult:
+        """What a draft would change compared with the schedule it would replace (a repair draft with
+        its base, any other draft with the active schedule), and how the numbers move: every
+        changed (employee, date) pair with the shift before and after, breaks moved within the same
+        shift (listed, not counted as changes), the number of changes (ChangedAssignments),
+        shortage and cost before and after in total and for the days that moved. All numbers come
+        from the independent checker. ref: SV-0003, RUN-0003, 'latest', a number from the list of
+        drafts, or empty for 'the draft' (AMBIGUOUS if several: ask which). Changes nothing."""
+        try:
+            c = compare_service(store, ref)
+        except Unresolved as e:
+            return CompareResult.fail(e.code, e.message, candidates=e.candidates)
+        data = store.load_input(store.schedule_version_info(c.draft)["input_version"])
+
+        def name(eid):
+            return data.employees[eid].name if eid in data.employees else eid
+
+        def totals(t):
+            return None if t is None else TotalsOut(**t.__dict__)
+        return CompareResult(
+            draft=c.draft, draft_status=c.draft_status, run_type=c.run_type, compared_with=c.compared_with,
+            compared_with_is_active=c.compared_with_is_active, before=totals(c.before), after=totals(c.after),
+            changed_assignments=c.diff.changed_assignments if c.before else None,
+            changes=[ChangeOut(employee_id=x.employee_id, name=name(x.employee_id), date=x.date.isoformat(),
+                               weekday=DAY_NAMES.get(day_of_week(x.date)), kind=x.kind, before=x.before,
+                               after=x.after) for x in c.diff.changes],
+            break_moves=[BreakMoveOut(employee_id=x.employee_id, name=name(x.employee_id), date=x.date.isoformat(),
+                                      shift_id=x.shift_id, before=x.before, after=x.after)
+                         for x in c.diff.break_moves],
+            days=[DayDeltaOut(date=d.date.isoformat(), weekday=DAY_NAMES.get(day_of_week(d.date)),
+                              shortage_before=d.shortage_before, shortage_after=d.shortage_after,
+                              cost_before=d.cost_before, cost_after=d.cost_after) for d in c.days],
+            min_shifts_exempt=c.min_shifts_exempt, open_absences=c.open_absences, note=c.note or None)
 
     return mcp
 
