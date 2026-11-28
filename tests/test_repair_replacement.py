@@ -30,7 +30,8 @@ from shiftopt.export.service import changed_assignments
 from shiftopt.ingest import import_workbook
 from shiftopt.mcp_server import build_server
 from shiftopt.service import approve_draft, run_initial
-from shiftopt.service.absence import report_absence
+from shiftopt.engine.repair import single_replacement
+from shiftopt.service.absence import repair_start, report_absence
 from shiftopt.service.locks import set_lock
 from shiftopt.service.repair import run_repair
 from shiftopt.validator import validate
@@ -90,6 +91,7 @@ def test_the_only_valid_candidate_replaces_the_absent_employee(store):
     run = out.run
     assert (run.status, run.run_type, run.base_schedule_version) == ("OPTIMAL", "REPAIR", base)
     assert run.validation_passed and run.coverage_proven and run.cost_proven and run.stability_proven
+    assert out.mode == "SINGLE_REPLACEMENT" and out.changed_assignments == 2
     assert "single-replacement scope" in run.diagnostics[0]
     assert [(r.absent_employee, r.date, r.shift_id, r.replacement_employee) for r in out.replacements] == \
         [("A", WED, "S4", "B")]
@@ -112,16 +114,18 @@ def before_cost(schedule) -> float:
     {**WEEKDAYS, "B": (1, 2, 4, 5)},                   # B already works on Wednesday
     {**WEEKDAYS, "B": (1, 2, 3, 5, 6)},                # B already has 5 shifts
 ])
-def test_no_single_replacement_changes_nothing(tmp_path, variant):
+def test_no_single_replacement_when_the_free_employee_cannot_take_it(tmp_path, variant):
+    """The engine finds no single replacement; the service then re-optimizes (SCRUM-42)."""
     store = make_store(tmp_path, variant)
-    base = store.active_schedule_version()
-    runs_before = len(store.list_runs())
     report_absence(store, "A", WED)
+    start = repair_start(store)
+    data = store.load_input()
+    r = single_replacement(data, start.schedule.assignments, start.removed,
+                           {(a.employee_id, a.date) for a in start.fixed}, start.blocked,
+                           start.schedule.min_shifts_exempt, 10, workers=2)
+    assert (r.status, r.schedule) == ("NO_REPLACEMENT", None)
     out = run_repair(store, 10, workers=2)
-    assert out.run is None and "No single replacement" in out.message
-    assert len(store.list_runs()) == runs_before                    # nothing stored
-    assert store.active_schedule_version() == base
-    assert store.list_absences()[0]["status"] == "OPEN"
+    assert out.mode == "REOPTIMIZED" and out.replacements == []
 
 
 def test_started_and_locked_shifts_stay_exactly_as_they_are(store):
@@ -152,13 +156,13 @@ def test_nothing_to_repair(store):
 
 def test_course_sample_has_no_single_replacement_on_wednesday(tmp_path, small_input):
     """In Input_Small_10 the employees free on a day are exactly those unavailable that day,
-    so no absence there has a single replacement; the broader repair is SCRUM-42."""
+    so no absence there has a single replacement: the repair re-optimizes (SCRUM-42)."""
     s = Store(str(tmp_path / "s.sqlite"))
     import_workbook(s, small_input)
     approve_draft(s, run_initial(s, 10, workers=2, seed=0).run.schedule_version)
     a = next(x for x in s.load_schedule(s.active_schedule_version()).assignments if x.date == dt.date(2026, 11, 4))
     report_absence(s, a.employee_id, a.date)
-    assert run_repair(s, 10, workers=2).run is None
+    assert run_repair(s, 10, workers=2).mode == "REOPTIMIZED"
 
 
 # ------------------------------------------------------------------ export, tool, command line
