@@ -85,7 +85,13 @@ Rules for the assistant:
 - Do not open, read or ask for access to the input or exported Excel files to answer questions; the tools are the
   only source. If no tool answers a question, say that this is not available yet instead of looking elsewhere.
 - Creating a schedule makes a DRAFT. Nothing becomes the active schedule until the manager explicitly approves it.
-  Call approve_draft only when the manager has clearly asked to approve that draft; never on your own initiative.
+- Approval (spec: only on the manager's explicit approval of that draft version):
+  * Call approve_draft only when the manager's own message asks to approve (for example "approve", "אשר",
+    "approve the draft you showed"). Never on your own initiative.
+  * A reply that only picks a draft, such as an answer to your clarifying question ("the first one", "SV-0002",
+    "הראשונה"), is a choice, not an approval. Ask "Approve SV-0002?" and wait for a clear yes.
+  * Before approving, resolve the draft to one exact version with resolve_reference (kind 'draft'); then call
+    approve_draft with that version ID. approve_draft accepts only an exact ID (SV-0003 or RUN-0003).
 - When the manager reports that an employee will be absent, call report_absence. It records the absence only; the
   active schedule does not change until a repair draft is approved. Then call repair_schedule to propose the repair.
 - Before asking the manager whether to approve a draft that would replace an active schedule, call compare_draft and
@@ -248,12 +254,25 @@ def build_server(store: Store, *, export_dir: str | Path = "exports") -> MCPServ
 
     @mcp.tool(annotations=CHANGES_ACTIVE)
     def approve_draft(ref: str | None = None) -> ApprovalResult:
-        """Approve a draft so that it becomes the active schedule. Only when the manager has
-        clearly asked to approve it. ref: SV-0003, RUN-0003, 'latest', a number from the
-        list of drafts, or empty for 'the draft' (AMBIGUOUS if there are several: ask which).
-        The server first checks that the draft's input is still the current input and that
-        the schedule passes the independent checker; otherwise nothing changes and the
-        reason is returned. The previously active schedule is kept in history."""
+        """Approve one draft so that it becomes the active schedule. Only when the manager's own
+        message explicitly asks to approve it; a reply that only picks a draft is not an approval
+        (confirm "Approve SV-0003?" first). ref must be the exact version, SV-0003 or RUN-0003:
+        resolve the manager's words first with resolve_reference (kind 'draft'). Anything else
+        ('latest', 'the first one', empty) is refused with INVALID_PARAMETER and the drafts to
+        choose from, and nothing changes. The server then checks that the draft's input and base
+        are still current and that the schedule passes the independent checker; otherwise nothing
+        changes and the reason is returned. The previously active schedule is kept in history."""
+        exact = (ref or "").strip().upper()
+        if not re.match(r"^(SV|RUN)-\d+$", exact):
+            active_in = store.active_input_version()
+            drafts = [d["schedule_version"] for d in reversed(store.list_schedule_versions(
+                input_version=active_in, approval_status="DRAFT"))] if active_in else []
+            return ApprovalResult.fail(
+                "INVALID_PARAMETER",
+                "Approval needs the exact draft version. Resolve the manager's words with resolve_reference, ask "
+                "the manager to confirm that version, then call approve_draft with it.",
+                candidates=drafts, active_schedule_version=store.active_schedule_version())
+        ref = exact
         try:
             version = resolve_draft(store, ref)
             out = approve_service(store, version)
