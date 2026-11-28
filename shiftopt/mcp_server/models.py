@@ -283,8 +283,11 @@ class ReplacementOut(BaseModel):
 
 
 class RepairResult(ToolResult):
-    run: RunBrief | None = Field(None, description="The repair run; empty when no single replacement exists")
-    replacements: list[ReplacementOut] = Field(default_factory=list)
+    run: RunBrief | None = Field(None, description="The repair run")
+    mode: str | None = Field(None, description="SINGLE_REPLACEMENT, or REOPTIMIZED when no single replacement exists")
+    changed_assignments: int | None = Field(None, description="Changed (employee, date) pairs in the draft "
+                                                              "(break-only moves not counted)")
+    replacements: list[ReplacementOut] = Field(default_factory=list, description="SINGLE_REPLACEMENT only")
     moved_breaks: int | None = Field(None, description="Breaks of other shifts moved (not counted as changes)")
     open_absences: list[str] = Field(default_factory=list, description="The absences this repair answers")
     active_schedule_version: str | None = Field(None, description="Unchanged until a repair draft is approved")
