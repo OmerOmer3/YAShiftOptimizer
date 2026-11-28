@@ -131,10 +131,11 @@ def test_tool_approves_a_named_draft(store, tmp_path):
     assert call(srv, "get_system_status", {}).structured_content["active_schedule_version"] == v
 
 
-def test_tool_asks_which_draft_when_there_are_two(store, tmp_path):
-    draft(store), draft(store, seed=1)
+def test_tool_needs_the_exact_draft_and_lists_the_choices(store, tmp_path):
+    """SCRUM-113: approval only for an exact version; without one, the drafts to choose from."""
+    a, b = draft(store), draft(store, seed=1)
     s = call(build_server(store, export_dir=tmp_path), "approve_draft", {}).structured_content
-    assert s["ok"] is False and s["error"]["code"] == "AMBIGUOUS" and len(s["error"]["candidates"]) == 2
+    assert s["ok"] is False and s["error"]["code"] == "INVALID_PARAMETER" and s["error"]["candidates"] == [a, b]
     assert store.active_schedule_version() is None
 
 
