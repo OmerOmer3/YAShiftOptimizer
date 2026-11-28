@@ -3,7 +3,8 @@
 Spec section 4: the database stores employees, demand, templates, break rules, runs,
 versions, locks and absences. Locks are the is_locked flag of an assignment (SCRUM-39):
 a lock is set on the active schedule's shift, and every lock and unlock is recorded in
-the audit log. Absences arrive with SCRUM-40.
+the audit log. Absences (SCRUM-40) have their own table: one row per reported absence,
+OPEN until a repair draft that removes the shift is approved, then RESOLVED.
 
   input_versions      one row per successful import; exactly one is active
   employees, demand_hours, shift_templates, break_rules
@@ -14,6 +15,7 @@ the audit log. Absences arrive with SCRUM-40.
                       change the active schedule")
   assignments         the shifts of a schedule version, breaks included
   schedule_exemptions employees exempt from the 4-shift minimum in that version
+  absences            reported full-day absences and whether an approved repair answers them
 
 Money is stored in whole cents so totals are exact.
 """
@@ -150,7 +152,7 @@ class ScheduleVersionRow(Base):
 
 class AuditLogRow(Base):
     """One recorded change to the schedule (SCRUM-24). Written in the same transaction as
-    the change itself. Actions: APPROVED, LOCKED, UNLOCKED (SCRUM-39); ABSENCE_REPORTED (SCRUM-40)."""
+    the change itself. Actions: APPROVED, LOCKED, UNLOCKED (SCRUM-39), ABSENCE_REPORTED (SCRUM-40)."""
     __tablename__ = "audit_log"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     at: Mapped[dt.datetime] = mapped_column(DateTime)
@@ -177,6 +179,22 @@ class AssignmentRow(Base):
     paid_hours: Mapped[float] = mapped_column(Float)
     cost_cents: Mapped[int] = mapped_column(Integer)
     is_locked: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class AbsenceRow(Base):
+    """A reported full-day absence (SCRUM-40, spec section 3). OPEN until a repair draft
+    without that shift is approved (RESOLVED, with the version that resolved it)."""
+    __tablename__ = "absences"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    input_version_id: Mapped[int] = mapped_column(ForeignKey("input_versions.id"))
+    reported_on_version_id: Mapped[int] = mapped_column(ForeignKey("schedule_versions.id"))
+    employee_id: Mapped[str] = mapped_column(String(64))
+    date: Mapped[dt.date] = mapped_column(Date)
+    shift_id: Mapped[str] = mapped_column(String(64))
+    was_locked: Mapped[bool] = mapped_column(Boolean, default=False)
+    status: Mapped[str] = mapped_column(String(16), default="OPEN")   # OPEN or RESOLVED
+    reported_at: Mapped[dt.datetime] = mapped_column(DateTime)
+    resolved_by_version_id: Mapped[int | None] = mapped_column(ForeignKey("schedule_versions.id"), nullable=True)
 
 
 class ExemptionRow(Base):
@@ -420,6 +438,13 @@ class Store:
             now = dt.datetime.now()
             s.execute(update(ScheduleVersionRow).where(ScheduleVersionRow.is_active).values(is_active=False))
             sv.approval_status, sv.is_active, sv.approved_at = "APPROVED", True, now
+            # Absences answered by this schedule: same input, and the absent shift is not in it (SCRUM-40).
+            kept = {(r.employee_id, r.date) for r in s.scalars(
+                select(AssignmentRow).where(AssignmentRow.schedule_version_id == sv.id))}
+            for ab in s.scalars(select(AbsenceRow).where(AbsenceRow.status == "OPEN",
+                                                         AbsenceRow.input_version_id == sv.input_version_id)):
+                if sv.base_version_id is not None and (ab.employee_id, ab.date) not in kept:
+                    ab.status, ab.resolved_by_version_id = "RESOLVED", sv.id
             run = s.get(RunRow, sv.run_id)
             s.add(AuditLogRow(
                 at=now, action="APPROVED", schedule_version_id=sv.id,
@@ -463,6 +488,52 @@ class Store:
                               details=json.dumps({"employee_id": employee_id, "date": date.isoformat(),
                                                   "shift_id": row.shift_id})))
             return row.shift_id
+
+    def record_absence(self, version: str, employee_id: str, date: dt.date) -> tuple[str, bool]:
+        """Record a full-day absence against the active schedule `version` and write an
+        ABSENCE_REPORTED audit entry, in one transaction (SCRUM-40). The caller has checked
+        that the employee has a shift that day which has not started. An OPEN absence for the
+        same employee and date is returned instead of a new one. Returns (absence_id, created).
+        Raises StaleState("ACTIVE_CHANGED") or LookupError."""
+        with Session(self.engine) as s, s.begin():
+            sv = s.scalars(select(ScheduleVersionRow).where(ScheduleVersionRow.is_active)).first()
+            if sv is None or sv.id != _num(version):
+                raise StaleState("ACTIVE_CHANGED")
+            same = s.scalars(select(AbsenceRow).where(AbsenceRow.status == "OPEN", AbsenceRow.employee_id ==
+                                                      employee_id, AbsenceRow.date == date,
+                                                      AbsenceRow.input_version_id == sv.input_version_id)).first()
+            if same is not None:
+                return _code("AB", same.id), False
+            row = s.get(AssignmentRow, (sv.id, employee_id, date))
+            if row is None:
+                raise LookupError(f"{employee_id} has no shift on {date.isoformat()} in {version}")
+            now = dt.datetime.now()
+            ab = AbsenceRow(input_version_id=sv.input_version_id, reported_on_version_id=sv.id,
+                            employee_id=employee_id, date=date, shift_id=row.shift_id, was_locked=row.is_locked,
+                            status="OPEN", reported_at=now)
+            s.add(ab)
+            s.flush()
+            s.add(AuditLogRow(at=now, action="ABSENCE_REPORTED", schedule_version_id=sv.id,
+                              input_version_id=sv.input_version_id,
+                              details=json.dumps({"absence_id": _code("AB", ab.id), "employee_id": employee_id,
+                                                  "date": date.isoformat(), "shift_id": row.shift_id,
+                                                  "was_locked": row.is_locked})))
+            return _code("AB", ab.id), True
+
+    def list_absences(self, *, status: str | None = None, input_version: str | None = None) -> list[dict]:
+        """Reported absences, oldest first."""
+        with Session(self.engine) as s:
+            q = select(AbsenceRow).order_by(AbsenceRow.id)
+            if status:
+                q = q.where(AbsenceRow.status == status)
+            if input_version:
+                q = q.where(AbsenceRow.input_version_id == _num(input_version))
+            return [{"absence_id": _code("AB", r.id), "input_version": _code("IN", r.input_version_id),
+                     "reported_on_version": _code("SV", r.reported_on_version_id), "employee_id": r.employee_id,
+                     "date": r.date, "shift_id": r.shift_id, "was_locked": r.was_locked, "status": r.status,
+                     "reported_at": r.reported_at,
+                     "resolved_by_version": None if r.resolved_by_version_id is None
+                     else _code("SV", r.resolved_by_version_id)} for r in s.scalars(q)]
 
     def active_schedule_version(self) -> str | None:
         """The approved, active schedule. Only approve() changes it (SCRUM-37)."""

@@ -16,6 +16,9 @@ the same template and breaks (spec section 3, SCRUM-39). A lock can be set after
 draft was made, so this is checked at approval (LOCK_VIOLATED). The one exception is the
 shift of an employee reported absent, which is removed even if locked (spec section 3);
 the draft marks that employee as exempt from the minimum.
+
+No draft, initial or repair, may give a shift to an employee on a day they are reported
+absent (SCRUM-40); approving a repair draft that removes an absent shift resolves it.
 """
 from __future__ import annotations
 
@@ -24,6 +27,7 @@ from dataclasses import dataclass, field
 
 from shiftopt.db import Store
 from shiftopt.db.store import StaleState
+from shiftopt.service.absence import absent_shifts_kept
 from shiftopt.validator import validate
 
 
@@ -92,6 +96,11 @@ def approve_draft(store: Store, version: str) -> ApprovalOutcome:
             raise ApprovalRefused("LOCK_VIOLATED",
                                   f"{version} changes {len(broken)} locked shift(s) of the active schedule; it was "
                                   "not approved. Create a new repair draft.", broken)
+    absent = absent_shifts_kept(store, info["input_version"], store.load_schedule(version))
+    if absent:
+        raise ApprovalRefused("VALIDATION_FAILED",
+                              f"{version} gives a shift to an employee on a day they are reported absent; it "
+                              "was not approved. Repair the active schedule instead.", absent)
 
     run = store.get_run(info["run_id"])
     report = validate(store.load_input(info["input_version"]), store.load_schedule(version),

@@ -12,7 +12,7 @@ Run it for a chat client over stdio:
 Tools are added per story: status and export (SCRUM-32/44); import, solve and run status
 (SCRUM-33); resolving employees, dates and drafts (SCRUM-36);
 employee and coverage queries (SCRUM-34/35); approval (SCRUM-37); the change log (SCRUM-24);
-locking and unlocking a future shift (SCRUM-39).
+locking and unlocking a future shift (SCRUM-39); reporting an absence (SCRUM-40).
 """
 from __future__ import annotations
 
@@ -35,6 +35,7 @@ from shiftopt.engine.solver import DEFAULT_SEED, DEFAULT_WORKERS
 from shiftopt.export import ExportError, export_run, resolve_run
 from shiftopt.ingest import import_workbook, read_input
 from shiftopt.mcp_server.models import (
+    AbsenceResult,
     ApprovalResult,
     AuditEntry,
     AuditResult,
@@ -55,6 +56,7 @@ from shiftopt.mcp_server.models import (
 )
 from shiftopt.service import NoActiveInput, run_initial
 from shiftopt.service.approve import ApprovalRefused, approve_draft as approve_service
+from shiftopt.service.absence import AbsenceRefused, report_absence as absence_service
 from shiftopt.service.locks import LockRefused, set_lock
 from shiftopt.service.queries import get_coverage as coverage_service
 from shiftopt.service.queries import get_employee as employee_service
@@ -74,6 +76,8 @@ Rules for the assistant:
   only source. If no tool answers a question, say that this is not available yet instead of looking elsewhere.
 - Creating a schedule makes a DRAFT. Nothing becomes the active schedule until the manager explicitly approves it.
   Call approve_draft only when the manager has clearly asked to approve that draft; never on your own initiative.
+- When the manager reports that an employee will be absent, call report_absence. It records the absence only; the
+  active schedule does not change until a repair draft is approved.
 - Lock or unlock a shift only when the manager asks to. Locks belong to shifts of the active (approved) schedule
   that have not started; a locked shift is kept as it is by every later repair.
 - An empty value means 'not available', not zero; say so instead of reporting 0.
@@ -109,7 +113,9 @@ def build_server(store: Store, *, export_dir: str | Path = "exports") -> MCPServ
         return SystemStatus(now=clock.now().isoformat(timespec="minutes"),
                             active_input_version=store.active_input_version(),
                             active_schedule_version=store.active_schedule_version(),
-                            run_count=len(runs), latest_run=brief(runs[-1]) if runs else None)
+                            run_count=len(runs), latest_run=brief(runs[-1]) if runs else None,
+                            open_absences=[f"{a['absence_id']} {a['employee_id']} {a['date'].isoformat()}"
+                                           for a in store.list_absences(status="OPEN")])
 
     @mcp.tool(annotations=WRITES_FILE)
     def export_schedule(ref: str | None = None, file_name: str | None = None) -> ExportResult:
@@ -254,8 +260,8 @@ def build_server(store: Store, *, export_dir: str | Path = "exports") -> MCPServ
     def list_changes(limit: Annotated[int, Field(ge=1, le=200)] = 20,
                      schedule_version: str | None = None) -> AuditResult:
         """The record of changes to the schedule, newest first: each approval with its time,
-        the version approved and the version it replaced, and each lock and unlock with the
-        employee and date (absences from sprint 4).
+        the version approved and the version it replaced, and each lock, unlock and reported
+        absence with the employee and date.
         Optionally only the entries that affected one schedule version (SV-0003 or RUN-0003)."""
         version = None
         if schedule_version:
@@ -269,7 +275,7 @@ def build_server(store: Store, *, export_dir: str | Path = "exports") -> MCPServ
                               total_cost=e["details"].get("total_cost"),
                               total_shortage_slots=e["details"].get("total_shortage_slots"),
                               employee_id=e["details"].get("employee_id"), date=e["details"].get("date"),
-                              shift_id=e["details"].get("shift_id"))
+                              shift_id=e["details"].get("shift_id"), absence_id=e["details"].get("absence_id"))
                    for e in store.list_audit(limit=limit, schedule_version=version)]
         return AuditResult(entries=entries)
 
@@ -361,6 +367,33 @@ def build_server(store: Store, *, export_dir: str | Path = "exports") -> MCPServ
         """Remove the lock from one shift of the active schedule, so that a later repair may change
         it. Only when the manager asks to unlock it. Same parameters and checks as lock_shift."""
         return _lock(employee, date, False)
+
+    @mcp.tool(annotations=CREATES)
+    def report_absence(employee: str, date: str) -> AbsenceResult:
+        """Record that an employee will be absent for a whole day, before that shift starts. employee:
+        an ID or a name; date: a date or a day name in the planning week; both resolved by the server
+        (AMBIGUOUS or NOT_FOUND come with candidates: ask which). The shift is removed in the repair
+        draft even if it is locked, and the employee becomes exempt from the 4-shift minimum this
+        week. If the employee has no shift that day, nothing is recorded and the message says so.
+        Refused with SHIFT_STARTED if the shift has started. The active schedule does not change."""
+        active = store.active_schedule_version()
+        if active is None:
+            return AbsenceResult.fail("NOT_FOUND", "There is no active schedule yet; approve a draft first.")
+        data = store.load_input(store.schedule_version_info(active)["input_version"])
+        try:
+            eid = resolve_employee(data, employee)
+            d = resolve_date(data, date)
+            out = absence_service(store, eid, d)
+        except Unresolved as e:
+            return AbsenceResult.fail(e.code, e.message, candidates=e.candidates, schedule_version=active)
+        except AbsenceRefused as e:
+            return AbsenceResult.fail(e.code, e.message, schedule_version=active)
+        return AbsenceResult(absence_id=out.absence_id, created=out.created, employee_id=eid,
+                             name=data.employees[eid].name, date=d.isoformat(), weekday=DAY_NAMES.get(day_of_week(d)),
+                             shift_id=out.shift_id, start=out.start, end=out.end,
+                             was_locked=out.was_locked if out.absence_id else None,
+                             min_shifts_exempt=True if out.absence_id else None,
+                             schedule_version=out.schedule_version, message=out.message)
 
     return mcp
 
