@@ -44,7 +44,11 @@ shiftopt approve SV-0001
 shiftopt lock E003 2026-11-04
 shiftopt unlock E003 Wednesday
 
-# The record of approvals, locks and unlocks (absences from SCRUM-40), newest first
+# Report a full-day absence before the shift starts; list reported absences
+shiftopt absence E003 Wednesday
+shiftopt absences
+
+# The record of approvals, locks, unlocks and reported absences, newest first
 shiftopt log
 ```
 
@@ -82,7 +86,7 @@ Claude Desktop: Settings → Developer → Edit Config, then add (use absolute p
 
 On Windows the command is `C:\path\to\.venv\Scripts\shiftopt-mcp.exe`. Restart the client after editing.
 The `env` line fixes the server's current time for a demo with the sample files; leave it out to use the clock.
-Tools so far: `get_system_status` (also shows the current time the server uses), `import_input`, `create_schedule`, `get_run_status`, `resolve_reference`, `approve_draft`, `list_changes`, `get_coverage`, `get_employee_schedule`, `export_schedule`, `lock_shift`, `unlock_shift`. A solve runs on a worker thread, so the server stays responsive.
+Tools so far: `get_system_status` (also shows the current time the server uses), `import_input`, `create_schedule`, `get_run_status`, `resolve_reference`, `approve_draft`, `list_changes`, `get_coverage`, `get_employee_schedule`, `export_schedule`, `lock_shift`, `unlock_shift`, `report_absence` (records the absence; the repair itself arrives with SCRUM-41/42). `get_system_status` also lists open absences. A solve runs on a worker thread, so the server stays responsive.
 Every number the assistant reports comes from a tool result; business errors come back as
 `{"ok": false, "error": {"code", "message", "candidates"}}` so the assistant can ask the manager.
 
@@ -100,7 +104,7 @@ CI runs the same command on every push (`.github/workflows/ci.yml`).
 | --- | --- | --- |
 | `shiftopt/domain.py` | Shared model: 30-minute slots, half-open intervals | Sprint 1 |
 | `shiftopt/ingest` | Excel import, schema 1.0 checks, errors by sheet/row/column | Sprint 1 |
-| `shiftopt/db` | Input tables, runs, schedule versions, assignments with locks, audit log (absences: sprint 4) | Sprints 1-4 |
+| `shiftopt/db` | Input tables, runs, schedule versions, assignments with locks, absences, audit log | Sprints 1-4 |
 | `shiftopt/validator` | Independent hard-rule checker and metrics; never imports `engine` | Sprint 1 |
 | `shiftopt/engine` | CP-SAT model: shortage first, then cost, one time budget ([docs/model.md](docs/model.md)) | Sprint 2 |
 | `shiftopt/service` | Runs and drafts (later: approval, repair) | Sprint 2 (partial) |

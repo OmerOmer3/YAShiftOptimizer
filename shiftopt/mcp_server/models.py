@@ -75,6 +75,9 @@ class SystemStatus(ToolResult):
                                               "started (ISO); fixed for demos, otherwise the computer's clock")
     active_input_version: str | None = None
     active_schedule_version: str | None = Field(None, description="The approved schedule in force, if any")
+    open_absences: list[str] = Field(default_factory=list,
+                                     description="Reported absences without an approved repair yet "
+                                                 "('AB-0001 E003 2026-11-04')")
     run_count: int = 0
     latest_run: RunBrief | None = None
 
@@ -144,15 +147,16 @@ class ApprovalResult(ToolResult):
 class AuditEntry(BaseModel):
     entry_id: str
     at: str = Field(description="ISO time of the change")
-    action: str = Field(description="APPROVED, LOCKED or UNLOCKED; ABSENCE_REPORTED from SCRUM-40")
+    action: str = Field(description="APPROVED, LOCKED, UNLOCKED or ABSENCE_REPORTED")
     schedule_version: str = Field(description="The schedule version the change affected")
     replaced_version: str | None = Field(description="For APPROVED: the schedule that was active before")
     input_version: str | None
     run_id: str | None
     total_cost: float | None = None
     total_shortage_slots: int | None = None
-    employee_id: str | None = Field(None, description="For LOCKED and UNLOCKED: whose shift")
-    date: str | None = Field(None, description="For LOCKED and UNLOCKED: the date of the shift")
+    employee_id: str | None = Field(None, description="For LOCKED, UNLOCKED and ABSENCE_REPORTED: whose shift")
+    date: str | None = Field(None, description="For LOCKED, UNLOCKED and ABSENCE_REPORTED: the date")
+    absence_id: str | None = None
     shift_id: str | None = None
 
 
@@ -247,3 +251,21 @@ class LockResult(ToolResult):
     is_locked: bool | None = Field(None, description="The shift's lock state after this call")
     changed: bool | None = Field(None, description="False if the shift already had this state (nothing recorded)")
     now: str | None = Field(None, description="The time used to check that the shift has not started")
+
+
+class AbsenceResult(ToolResult):
+    absence_id: str | None = Field(None, description="Empty when the employee had no shift that day "
+                                                     "(nothing recorded)")
+    created: bool | None = Field(None, description="False for a repeated report or a day without a shift")
+    employee_id: str | None = None
+    name: str | None = None
+    date: str | None = None
+    weekday: str | None = None
+    shift_id: str | None = Field(None, description="The shift that will be removed in the repair draft")
+    start: str | None = None
+    end: str | None = None
+    was_locked: bool | None = Field(None, description="The removed shift was locked (removed anyway, spec 3)")
+    min_shifts_exempt: bool | None = Field(None, description="The employee is exempt from the 4-shift minimum "
+                                                             "this week")
+    schedule_version: str | None = Field(None, description="The active schedule, unchanged by the report")
+    message: str | None = Field(None, description="What happened, in one or two sentences for the manager")

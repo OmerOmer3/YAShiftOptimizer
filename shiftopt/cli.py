@@ -11,6 +11,8 @@ so the optimizer can be measured in isolation (spec section 9).
     shiftopt log [--limit 20]                (recorded approvals and changes, newest first)
     shiftopt lock E003 2026-11-04            (lock a future shift of the active schedule; also: Wednesday)
     shiftopt unlock E003 2026-11-04
+    shiftopt absence E003 Wednesday          (report a full-day absence; the shift is removed in the repair)
+    shiftopt absences                        (reported absences and whether a repair was approved)
     shiftopt --now 2026-11-03T07:00 ...      (fixed current time for demos; default: the computer's clock)
 
 Exit codes: 0 success, 1 a schedule failed validation, no schedule was produced or an
@@ -29,6 +31,7 @@ from shiftopt.export import ExportError, export_run
 from shiftopt.ingest import import_workbook, read_input
 from shiftopt.ingest.schedule_reader import read_schedule
 from shiftopt.service import ApprovalRefused, NoActiveInput, approve_draft, run_initial
+from shiftopt.service.absence import AbsenceRefused, report_absence
 from shiftopt.service.locks import LockRefused, set_lock
 from shiftopt.service.resolve import Unresolved, resolve_date, resolve_employee
 from shiftopt.validator import validate
@@ -176,7 +179,7 @@ def _cmd_log(a) -> int:
         cost = d.get("total_cost")
         extra = "" if cost is None else f"  cost {cost:,.2f}, shortage {d.get('total_shortage_slots')}"
         if d.get("employee_id"):
-            extra = f"  {d['employee_id']} {d['date']} {d.get('shift_id', '')}"
+            extra = f"  {d['employee_id']} {d['date']} {d.get('shift_id', '')} {d.get('absence_id', '')}".rstrip()
         print(f"{e['entry_id']}  {e['at']:%Y-%m-%d %H:%M:%S}  {e['action']:<9} {e['schedule_version']}{replaced}"
               f"  {e['run_id'] or ''}{extra}")
     return 0
@@ -204,6 +207,39 @@ def _cmd_lock(a) -> int:
     note = "" if out.changed else f" (already {state}; nothing recorded)"
     print(f"OK  {out.employee_id} {out.date.isoformat()} {out.shift_id} {out.start}-{out.end} in "
           f"{out.schedule_version} is {state}{note}")
+    return 0
+
+
+def _cmd_absence(a) -> int:
+    store = Store(a.db)
+    active = store.active_schedule_version()
+    if active is None:
+        print("REFUSED  NOT_FOUND: there is no active schedule yet; approve a draft first.")
+        return 1
+    data = store.load_input(store.schedule_version_info(active)["input_version"])
+    try:
+        out = report_absence(store, resolve_employee(data, a.employee), resolve_date(data, a.date))
+    except Unresolved as e:
+        print(f"REFUSED  {e.code}: {e.message}")
+        if e.candidates:
+            print("  choices: " + ", ".join(e.candidates))
+        return 1
+    except AbsenceRefused as e:
+        print(f"REFUSED  {e.code}: {e.message}")
+        return 1
+    print(("OK  " if out.absence_id else "NO CHANGE  ") + out.message)
+    return 0
+
+
+def _cmd_absences(a) -> int:
+    rows = Store(a.db).list_absences()
+    if not rows:
+        print("No absences reported.")
+        return 0
+    print(f"{'Absence':<9}{'Employee':<10}{'Date':<12}{'Shift':<12}{'Status':<10}Resolved by")
+    for r in rows:
+        print(f"{r['absence_id']:<9}{r['employee_id']:<10}{r['date'].isoformat():<12}{r['shift_id']:<12}"
+              f"{r['status']:<10}{r['resolved_by_version'] or ''}")
     return 0
 
 
@@ -256,6 +292,14 @@ def main(argv=None) -> int:
         pk.add_argument("employee", help="employee ID or name")
         pk.add_argument("date", help="date (2026-11-04) or day name in the planning week")
         pk.set_defaults(fn=_cmd_lock)
+
+    pab = sub.add_parser("absence", help="report a full-day absence (before the shift starts)")
+    pab.add_argument("employee", help="employee ID or name")
+    pab.add_argument("date", help="date (2026-11-04) or day name in the planning week")
+    pab.set_defaults(fn=_cmd_absence)
+
+    pal = sub.add_parser("absences", help="list reported absences")
+    pal.set_defaults(fn=_cmd_absences)
 
     a = p.parse_args(argv)
     if a.cmd == "solve" and a.time_budget <= 0:
