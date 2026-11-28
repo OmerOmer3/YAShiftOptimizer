@@ -244,9 +244,11 @@ def _cmd_repair(a) -> int:
         print(f"REFUSED  {e.code}: {e.message}")
         return 1
     if out.run is None:
-        print("NO REPLACEMENT  " + out.message)
+        print("NO REPAIR  " + out.message)
         return 1
     _print_run(out.run)
+    if out.changed_assignments is not None:
+        print(f"{'ChangedAssignments':<26}{out.changed_assignments}")
     print(out.message)
     return 0 if out.run.schedule_version else 1
 

@@ -143,6 +143,52 @@ sprint 5 (Jira SCRUM-46).
   machines, so a 60 s budget may end FEASIBLE. Keep 8 workers as the default. Symmetry
   breaking between employees with the same unavailable days was tried and did not help
   (Jira SCRUM-82).
-* Repair (sprint 4) reuses this model: past and locked shifts become fixed variables, a
-  stage minimizing changed (employee, date) pairs is inserted between coverage and cost,
-  and the absent employee is passed in `min_shifts_exempt`.
+
+## 8. Repair after an absence (spec section 3)
+
+The repair reuses the weekly model of sections 2-3 and the same independent check. It
+starts from the active schedule (`service/absence.py: repair_start`): the absent shifts are
+removed (even if locked), the absent employees are passed in `min_shifts_exempt` (that
+week only; 5 shifts and 40 hours still hold), and the current time decides which shifts
+have started (`shiftopt/clock.py`, settable for demos because the sample week is past).
+
+**Fixed parts.** Started, completed and locked shifts keep their template and breaks:
+`x[e, t] = 1` and their `b[e, t, s] = 1`. The absent employee gets no shift on the absent
+day: every `x[e, t]` of that day is 0. Past shifts stay in the model, so every weekly quota
+counts them.
+
+**Step 2, single replacement** (`engine/repair.py: single_replacement`, Jira SCRUM-127).
+Every other kept shift also stays on its template; for each removed shift exactly one
+employee who is free that day takes the same template; no other `x` may change. Stage 1
+minimizes shortage; stage 2 keeps it and minimizes moved breaks, `sum (1 - b[e, t, s0])`
+over the original breaks of future unlocked shifts. Every candidate changes two pairs per
+absence and costs the same, so changes and cost are optimal by construction; the proof
+covers the single-replacement scope only (spec section 9).
+
+**Step 3, re-optimization** (`engine/repair.py: reoptimize`), only if step 2 is infeasible,
+with the rest of the same time budget. Future unlocked shifts may change; no shift may be
+added on a template that has already started. A change is an (employee, date) pair whose
+template differs from the active schedule:
+
+| Active schedule has, for (e, d) | changed[e, d] |
+| --- | --- |
+| template t0 | 1 - x[e, t0] (removed, or swapped to another template of d: counted once) |
+| no shift | sum of x[e, t] over the templates of d (added) |
+
+Break-only moves do not change `x`, so they are not counted (they are listed in the diff).
+Three lexicographic stages share the budget: minimize shortage; then minimize
+`sum changed` with shortage bounded; then minimize cost with both bounded.
+`StabilityOptimalityProven` is true only if the changes stage and the shortage stage were
+proven; `CostOptimalityProven` only if all three were. If no repair is found (INFEASIBLE,
+or NO_SOLUTION_FOUND when time runs out), no draft is saved, the active schedule stays and
+the absence stays open.
+
+**After solving.** The repair draft is re-checked by the independent checker, its totals
+must match the checker's, and every locked shift must be kept; only then is it saved as a
+REPAIR draft whose base is the active schedule. It becomes active only on explicit
+approval, which also refuses any draft that gives an absent employee a shift that day.
+
+First measurement (Input_Small_10, absence on Wednesday, now Monday 07:00, 2 workers):
+no single replacement exists (the employees free on any day are exactly those unavailable
+on it); the re-optimization found 3 changes and shortage 2, all three stages proven, in
+about 0.5 s.

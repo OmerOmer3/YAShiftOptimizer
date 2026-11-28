@@ -12,7 +12,7 @@ Run it for a chat client over stdio:
 Tools are added per story: status and export (SCRUM-32/44); import, solve and run status
 (SCRUM-33); resolving employees, dates and drafts (SCRUM-36);
 employee and coverage queries (SCRUM-34/35); approval (SCRUM-37); the change log (SCRUM-24);
-locking and unlocking a future shift (SCRUM-39); reporting an absence (SCRUM-40); repairing it with a single replacement (SCRUM-41).
+locking and unlocking a future shift (SCRUM-39); reporting an absence (SCRUM-40); repairing it with a single replacement (SCRUM-41) or by re-optimizing future shifts (SCRUM-42).
 """
 from __future__ import annotations
 
@@ -407,11 +407,12 @@ def build_server(store: Store, *, export_dir: str | Path = "exports") -> MCPServ
         seed: int = DEFAULT_SEED,
     ) -> RepairResult:
         """Propose a repair of the active schedule for the reported absences (report_absence first).
-        First one available employee takes the same shift, keeping every rule, with started,
-        completed and locked shifts unchanged; breaks of other future shifts may move. The result
-        is checked by the independent checker and saved as a REPAIR draft; the active schedule
-        changes only when the manager approves it. If no single replacement exists, nothing is
-        saved and the message says so."""
+        First one available employee takes the same shift, keeping every rule (mode
+        SINGLE_REPLACEMENT). If nobody can, the future shifts are re-optimized: least shortage,
+        then fewest changed (employee, date) pairs, then lowest cost (mode REOPTIMIZED). Started,
+        completed and locked shifts never change. The result is checked by the independent checker
+        and saved as a REPAIR draft; the active schedule changes only when the manager approves
+        it. If no repair exists, nothing changes and the absence stays open."""
         active = store.active_schedule_version()
         try:
             out = await anyio.to_thread.run_sync(
@@ -420,7 +421,8 @@ def build_server(store: Store, *, export_dir: str | Path = "exports") -> MCPServ
             return RepairResult.fail(e.code, e.message, active_schedule_version=active)
         data = store.load_input(out.start.input_version)
         return RepairResult(
-            run=None if out.run is None else brief(out.run),
+            run=None if out.run is None else brief(out.run), mode=out.mode,
+            changed_assignments=out.changed_assignments,
             replacements=[ReplacementOut(absent_employee=r.absent_employee, date=r.date.isoformat(),
                                          shift_id=r.shift_id, replacement_employee=r.replacement_employee,
                                          replacement_name=data.employees[r.replacement_employee].name)
