@@ -13,6 +13,7 @@ so the optimizer can be measured in isolation (spec section 9).
     shiftopt unlock E003 2026-11-04
     shiftopt absence E003 Wednesday          (report a full-day absence; the shift is removed in the repair)
     shiftopt absences                        (reported absences and whether a repair was approved)
+    shiftopt repair --time-budget 30         (propose a repair draft for the open absences)
     shiftopt --now 2026-11-03T07:00 ...      (fixed current time for demos; default: the computer's clock)
 
 Exit codes: 0 success, 1 a schedule failed validation, no schedule was produced or an
@@ -33,6 +34,7 @@ from shiftopt.ingest.schedule_reader import read_schedule
 from shiftopt.service import ApprovalRefused, NoActiveInput, approve_draft, run_initial
 from shiftopt.service.absence import AbsenceRefused, report_absence
 from shiftopt.service.locks import LockRefused, set_lock
+from shiftopt.service.repair import run_repair
 from shiftopt.service.resolve import Unresolved, resolve_date, resolve_employee
 from shiftopt.validator import validate
 
@@ -73,6 +75,10 @@ def _print_run(r) -> None:
         ("TotalCost", _num(r.total_cost, "{:,.2f}")),
         ("CoverageOptimalityProven", _flag(r.coverage_proven)),
         ("CostOptimalityProven", _flag(r.cost_proven)),
+    ]
+    if r.run_type == "REPAIR":
+        rows.append(("StabilityOptimalityProven", _flag(r.stability_proven)))
+    rows += [
         ("TerminationReason", r.termination_reason),
         ("ValidationPassed", _flag(r.validation_passed)),
     ]
@@ -231,6 +237,20 @@ def _cmd_absence(a) -> int:
     return 0
 
 
+def _cmd_repair(a) -> int:
+    try:
+        out = run_repair(Store(a.db), a.time_budget, workers=a.workers, seed=a.seed)
+    except AbsenceRefused as e:
+        print(f"REFUSED  {e.code}: {e.message}")
+        return 1
+    if out.run is None:
+        print("NO REPLACEMENT  " + out.message)
+        return 1
+    _print_run(out.run)
+    print(out.message)
+    return 0 if out.run.schedule_version else 1
+
+
 def _cmd_absences(a) -> int:
     rows = Store(a.db).list_absences()
     if not rows:
@@ -297,6 +317,12 @@ def main(argv=None) -> int:
     pab.add_argument("employee", help="employee ID or name")
     pab.add_argument("date", help="date (2026-11-04) or day name in the planning week")
     pab.set_defaults(fn=_cmd_absence)
+
+    prp = sub.add_parser("repair", help="propose a repair draft for the open absences")
+    prp.add_argument("--time-budget", type=float, default=30, help="seconds shared by all stages (default 30)")
+    prp.add_argument("--workers", type=int, default=DEFAULT_WORKERS)
+    prp.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    prp.set_defaults(fn=_cmd_repair)
 
     pal = sub.add_parser("absences", help="list reported absences")
     pal.set_defaults(fn=_cmd_absences)
