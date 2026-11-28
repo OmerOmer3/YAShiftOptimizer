@@ -179,7 +179,17 @@ Break-only moves do not change `x`, so they are not counted (they are listed in 
 Three lexicographic stages share the budget: minimize shortage; then minimize
 `sum changed` with shortage bounded; then minimize cost with both bounded.
 `StabilityOptimalityProven` is true only if the changes stage and the shortage stage were
-proven; `CostOptimalityProven` only if all three were. If no repair is found (INFEASIBLE,
+proven; `CostOptimalityProven` only if all three were.
+
+**Tie-break: fewest moved breaks** (Jira SCRUM-128). After the three spec objectives, a
+fourth stage keeps shortage, changes and cost at their values and minimizes moved breaks of
+the future unlocked shifts that keep their template: `sum (x[e, t0] - b[e, t0, s0])` over
+their original breaks (1 exactly when the shift stays and the break does not), the same
+measure as stage 2 of the single replacement. Break moves are allowed and are not changes
+(spec section 3), so this changes no reported objective and claims no proof flag; it only
+keeps the break-move list in the comparison short. Measured on Input_Small_10 (absence on
+Wednesday, the same active schedule): shortage 2, 3 changes and cost 11,370 with and without
+the stage; moved breaks 21 without it, 0 with it. If no repair is found (INFEASIBLE,
 or NO_SOLUTION_FOUND when time runs out), no draft is saved, the active schedule stays and
 the absence stays open.
 

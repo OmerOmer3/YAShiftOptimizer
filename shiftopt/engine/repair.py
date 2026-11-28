@@ -45,6 +45,12 @@ Three lexicographic stages share the time budget: shortage, then changes with sh
 bounded, then cost with both bounded. Each later objective is proven only if the earlier
 ones were (StabilityOptimalityProven, CostOptimalityProven).
 
+A fourth stage (SCRUM-128) is a tie-break after the three spec objectives, with all three
+bounded: move as few breaks of kept future shifts as possible, the same measure as stage 2
+of single_replacement. It never worsens shortage, changes or cost, it is not a spec
+objective and claims no proof flag; it only shortens the break-move list the manager sees
+in the comparison (break moves are allowed and are not changes, spec section 3).
+
 Like model.py, this module must stay independent of shiftopt.validator.
 """
 from __future__ import annotations
@@ -200,7 +206,8 @@ def single_replacement(data: InputData, kept: list[Assignment], removed: list[As
 
 def reoptimize(data: InputData, active: list[Assignment], fixed: set[tuple[str, dt.date]],
                blocked: set[tuple[str, dt.date]], started_templates: set[str], min_shifts_exempt: set[str],
-               time_budget_s: float, *, workers: int = DEFAULT_WORKERS, seed: int = DEFAULT_SEED) -> RepairResult:
+               time_budget_s: float, *, workers: int = DEFAULT_WORKERS, seed: int = DEFAULT_SEED,
+               minimize_break_moves: bool = True) -> RepairResult:
     """Re-optimize the future shifts of `active` (the active schedule, absent shifts included)."""
     t0 = time.perf_counter()
     info = solver_info(workers, seed)
@@ -244,6 +251,20 @@ def reoptimize(data: InputData, active: list[Assignment], fixed: set[tuple[str, 
             else:
                 changed.append(1)                                 # cannot keep it (not a valid variable)
         total_changes = sum(changed)
+
+        # Moved breaks of shifts that keep their template (future, unlocked, not absent):
+        # x - b is 1 exactly when the shift stays and that original break does not.
+        # Counted per break, as in single_replacement; never a change (spec section 3).
+        moves = []
+        for a in active:
+            key = (a.employee_id, a.date)
+            if key in fixed or key in blocked or (a.employee_id, a.shift_id) not in sm.x:
+                continue
+            xv = sm.x[(a.employee_id, a.shift_id)]
+            for br in a.breaks:
+                bv = sm.b.get((a.employee_id, a.shift_id, br.start))
+                moves.append(xv - bv if bv is not None else xv)
+        total_moves = sum(moves)
 
         # Start from the active schedule without the absent shifts.
         for (eid, sid), xv in sm.x.items():
@@ -297,6 +318,20 @@ def reoptimize(data: InputData, active: list[Assignment], fixed: set[tuple[str, 
                 solver_used = s3
                 cost_proven = st3 == cp_model.OPTIMAL and stability_proven
             notes.append(f"cost stage: {s3.StatusName(st3)}")
+
+            # ---- stage 4 (tie-break, not a spec objective): move as few breaks as possible,
+            # never worse on shortage, changes or cost.
+            if minimize_break_moves and moves and remaining() >= MIN_STAGE_SECONDS:
+                best_cost = round(solver_used.Value(sm.total_cost_units))
+                before = round(solver_used.Value(total_moves))
+                m.Add(sm.total_cost_units <= best_cost)
+                sm.hint_from(solver_used)
+                m.Minimize(total_moves)
+                s4 = _new_solver(remaining(), workers, seed)
+                st4 = s4.Solve(m)
+                if st4 in (cp_model.OPTIMAL, cp_model.FEASIBLE) and round(s4.ObjectiveValue()) <= before:
+                    solver_used = s4
+                notes.append(f"break-moves stage: {s4.StatusName(st4)}")
     else:
         notes.append("changes and cost stages skipped: no time left")
 
@@ -318,4 +353,5 @@ def reoptimize(data: InputData, active: list[Assignment], fixed: set[tuple[str, 
                   total_cost=round(sum(a.cost for a in schedule.assignments), 2),
                   coverage_proven=coverage_proven, cost_proven=cost_proven, stability_proven=stability_proven,
                   termination_reason=reason, changed_assignments=round(solver_used.Value(total_changes)),
+                  moved_breaks=round(solver_used.Value(total_moves)) if moves else 0,
                   diagnostics=[f"No single replacement exists; future shifts were re-optimized ({'; '.join(notes)})."])
