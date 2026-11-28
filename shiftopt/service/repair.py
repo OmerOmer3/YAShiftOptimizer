@@ -97,7 +97,8 @@ def run_repair(store: Store, time_budget_s: float, *, workers: int = DEFAULT_WOR
     if run.schedule_version and mode == "REOPTIMIZED":
         n = result.changed_assignments
         message = (f"No single replacement exists, so the future shifts were re-optimized. Repair draft "
-                   f"{run.schedule_version} (base {start.base_version}) changes {n} (employee, date) pair(s); "
+                   f"{run.schedule_version} (base {start.base_version}) changes {n} (employee, date) pair(s) "
+                   f"and moves {result.moved_breaks or 0} break(s) of other shifts (not counted as changes); "
                    "started, completed and locked shifts are unchanged. The active schedule is unchanged until the "
                    "manager approves the draft.")
     elif run.schedule_version:
