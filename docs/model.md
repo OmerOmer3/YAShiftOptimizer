@@ -24,7 +24,10 @@ its day (spec section 6), so the model never has to forbid a missing hour separa
 * `x[e, t]` in {0, 1}: employee e works template t. Created only when d(t) is not in U(e),
   so unavailable days cannot be violated.
 * `b[e, t, s]` in {0, 1}: a break of that shift starts at minute s, for s in B(t).
-* `short[d, s]` integer in [0, r(d, s)]: missing employees in slot s.
+* `short[d, s]` integer in [0, r(d, s)]: missing employees in slot s, equal to
+  max(0, required - active) (see the Coverage row below).
+* `gap[d, s]` integer: required minus active employees in slot s (may be negative);
+  an auxiliary variable for the exact shortage.
 
 Sizes: Input_Small_10 has 233 shift and 1,836 break variables; Input_Large_50 has
 1,166 and 9,192; both have 116 coverage slots.
@@ -39,9 +42,14 @@ Sizes: Input_Small_10 has 233 shift and 1,836 break variables; Input_Large_50 ha
 | Break count | sum over s of b[e, t, s] = k(t) x[e, t] (no breaks without the shift) |
 | Break spacing | for two starts s < s' of the same shift with s' - s < 30 + 60: b[e, t, s] + b[e, t, s'] <= 1 (at least one hour of work between breaks; also prevents overlap) |
 | Break position | only starts in B(t) exist, so the first-break and last-break rules hold by construction |
-| Coverage | short[d, s] >= r(d, s) - (sum of x[e, t] over shifts covering s - sum of b[e, t', s'] over breaks covering s) |
+| Coverage | gap[d, s] = r(d, s) - (sum of x[e, t] over shifts covering s - sum of b[e, t', s'] over breaks covering s); short[d, s] = max(0, gap[d, s]) with AddMaxEquality |
 
 Surplus is not modelled: it never offsets a shortage in another slot (spec section 2).
+
+The shortage is exact, not only a lower bound (Jira SCRUM-112). With `short >= gap` alone, a
+stage-1 run stopped by the time budget could leave slack in some `short` variables, so the
+objective value was higher than the real shortage of the returned schedule (found in
+SCRUM-106: engine 440, independent checker 385 on a slower computer).
 
 ## 4. Objective order and solution method
 
@@ -77,6 +85,12 @@ coverage, and two employees on the same template can break at different times (J
 | stage 1 UNKNOWN (time ran out, no schedule) | NO_SOLUTION_FOUND, never INFEASIBLE |
 | MODEL_INVALID or an exception while building | ERROR |
 | a schedule rejected by the independent checker | ERROR, VALIDATION_FAILED, no draft saved |
+| engine totals differ from the independent checker | ERROR, METRICS_MISMATCH, no draft saved |
+
+**Reported totals.** The run reports the shortage and cost of the schedule the engine
+returns, computed from that schedule, not the objective value of a stage. As a safety net,
+the run service compares these totals with the independent checker's: if they differ, the
+run is ERROR with reason `METRICS_MISMATCH` and no draft is saved (Jira SCRUM-106, SCRUM-112).
 
 `FirstFeasibleSeconds` is taken from a solution callback in stage 1 and is empty when no
 schedule is found. `OptimizationSeconds` (in the run service) covers model building,
