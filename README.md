@@ -40,8 +40,21 @@ shiftopt export RUN-0001 Schedule.xlsx
 # Approve a draft: the only operation that changes the active schedule
 shiftopt approve SV-0001
 
-# The record of approvals (and, from sprint 4, locks and absences), newest first
+# Lock or unlock a future shift of the active schedule (a date or a day name in the planning week)
+shiftopt lock E003 2026-11-04
+shiftopt unlock E003 Wednesday
+
+# The record of approvals, locks and unlocks (absences from SCRUM-40), newest first
 shiftopt log
+```
+
+Rules that depend on the current time (a shift that has started cannot be locked, changed
+or reported absent) use the computer's clock. The sample week (1-6 November 2026) is in the
+past, so for demos and tests the time can be fixed:
+
+```bash
+shiftopt --now 2026-11-03T07:00 lock E003 Wednesday        # this command only
+export SHIFTOPT_NOW=2026-11-03T07:00                        # every command (and the chat server)
 ```
 
 ## Chat client (MCP)
@@ -60,14 +73,16 @@ Claude Desktop: Settings → Developer → Edit Config, then add (use absolute p
   "mcpServers": {
     "yashiftoptimizer": {
       "command": "/absolute/path/to/.venv/bin/shiftopt-mcp",
-      "args": ["--db", "/absolute/path/to/shiftopt.db", "--export-dir", "/absolute/path/to/exports"]
+      "args": ["--db", "/absolute/path/to/shiftopt.db", "--export-dir", "/absolute/path/to/exports"],
+      "env": {"SHIFTOPT_NOW": "2026-11-02T07:00"}
     }
   }
 }
 ```
 
 On Windows the command is `C:\path\to\.venv\Scripts\shiftopt-mcp.exe`. Restart the client after editing.
-Tools so far: `get_system_status`, `import_input`, `create_schedule`, `get_run_status`, `resolve_reference`, `approve_draft`, `list_changes`, `get_coverage`, `get_employee_schedule`, `export_schedule` (more are added per story in sprint 3). A solve runs on a worker thread, so the server stays responsive.
+The `env` line fixes the server's current time for a demo with the sample files; leave it out to use the clock.
+Tools so far: `get_system_status` (also shows the current time the server uses), `import_input`, `create_schedule`, `get_run_status`, `resolve_reference`, `approve_draft`, `list_changes`, `get_coverage`, `get_employee_schedule`, `export_schedule`, `lock_shift`, `unlock_shift`. A solve runs on a worker thread, so the server stays responsive.
 Every number the assistant reports comes from a tool result; business errors come back as
 `{"ok": false, "error": {"code", "message", "candidates"}}` so the assistant can ask the manager.
 
@@ -85,7 +100,7 @@ CI runs the same command on every push (`.github/workflows/ci.yml`).
 | --- | --- | --- |
 | `shiftopt/domain.py` | Shared model: 30-minute slots, half-open intervals | Sprint 1 |
 | `shiftopt/ingest` | Excel import, schema 1.0 checks, errors by sheet/row/column | Sprint 1 |
-| `shiftopt/db` | Input tables, runs, schedule versions, assignments (later: locks, absences, audit log) | Sprints 1-2 |
+| `shiftopt/db` | Input tables, runs, schedule versions, assignments with locks, audit log (absences: sprint 4) | Sprints 1-4 |
 | `shiftopt/validator` | Independent hard-rule checker and metrics; never imports `engine` | Sprint 1 |
 | `shiftopt/engine` | CP-SAT model: shortage first, then cost, one time budget ([docs/model.md](docs/model.md)) | Sprint 2 |
 | `shiftopt/service` | Runs and drafts (later: approval, repair) | Sprint 2 (partial) |

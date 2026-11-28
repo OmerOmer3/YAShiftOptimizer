@@ -10,6 +10,12 @@ active schedule; it runs in one transaction that also writes the audit-log entry
 
 Initial drafts have no base (spec section 8), so choosing another initial draft of the
 same input is allowed; BASE_VERSION_STALE applies to drafts that have one (SCRUM-38).
+
+A repair draft must also keep every shift that is locked in the active schedule, with
+the same template and breaks (spec section 3, SCRUM-39). A lock can be set after the
+draft was made, so this is checked at approval (LOCK_VIOLATED). The one exception is the
+shift of an employee reported absent, which is removed even if locked (spec section 3);
+the draft marks that employee as exempt from the minimum.
 """
 from __future__ import annotations
 
@@ -41,6 +47,23 @@ class ApprovalOutcome:
     validation_details: list[str] = field(default_factory=list)
 
 
+def locked_shifts_not_kept(active, draft) -> list[str]:
+    """Locked shifts of `active` that `draft` does not keep exactly (template, times, breaks).
+    A locked shift of an employee reported absent (exempt in the draft) may be missing."""
+    kept = {(a.employee_id, a.date): a for a in draft.assignments}
+    out = []
+    for a in active.assignments:
+        if not a.is_locked:
+            continue
+        b = kept.get((a.employee_id, a.date))
+        if b is None and a.employee_id in draft.min_shifts_exempt:
+            continue
+        if b is None or (b.shift_id, b.start, b.end, b.breaks) != (a.shift_id, a.start, a.end, a.breaks):
+            out.append(f"{a.employee_id} on {a.date.isoformat()} ({a.shift_id}) is locked and was "
+                       f"{'removed' if b is None else 'changed'}")
+    return out
+
+
 def approve_draft(store: Store, version: str) -> ApprovalOutcome:
     version = version.strip().upper()
     info = store.schedule_version_info(version) if version.startswith("SV-") else None
@@ -62,6 +85,13 @@ def approve_draft(store: Store, version: str) -> ApprovalOutcome:
         raise ApprovalRefused("BASE_VERSION_STALE",
                               f"{version} was built on {info['base_version']}, but the active schedule is now {now}. "
                               "Approving it would overwrite a newer schedule; create a new draft instead.")
+
+    if info["base_version"] is not None:
+        broken = locked_shifts_not_kept(store.load_schedule(info["base_version"]), store.load_schedule(version))
+        if broken:
+            raise ApprovalRefused("LOCK_VIOLATED",
+                                  f"{version} changes {len(broken)} locked shift(s) of the active schedule; it was "
+                                  "not approved. Create a new repair draft.", broken)
 
     run = store.get_run(info["run_id"])
     report = validate(store.load_input(info["input_version"]), store.load_schedule(version),

@@ -9,9 +9,12 @@ so the optimizer can be measured in isolation (spec section 9).
     shiftopt export RUN-0001 out.xlsx        (or a schedule version, SV-0001)
     shiftopt approve SV-0001                 (make a draft the active schedule)
     shiftopt log [--limit 20]                (recorded approvals and changes, newest first)
+    shiftopt lock E003 2026-11-04            (lock a future shift of the active schedule; also: Wednesday)
+    shiftopt unlock E003 2026-11-04
+    shiftopt --now 2026-11-03T07:00 ...      (fixed current time for demos; default: the computer's clock)
 
 Exit codes: 0 success, 1 a schedule failed validation, no schedule was produced or an
-approval was refused,
+approval or a lock was refused,
 2 the input file is invalid or missing, or the run to export does not exist.
 """
 from __future__ import annotations
@@ -19,12 +22,15 @@ from __future__ import annotations
 import argparse
 import sys
 
+from shiftopt import clock
 from shiftopt.db import Store
 from shiftopt.engine.solver import DEFAULT_SEED, DEFAULT_WORKERS
 from shiftopt.export import ExportError, export_run
 from shiftopt.ingest import import_workbook, read_input
 from shiftopt.ingest.schedule_reader import read_schedule
 from shiftopt.service import ApprovalRefused, NoActiveInput, approve_draft, run_initial
+from shiftopt.service.locks import LockRefused, set_lock
+from shiftopt.service.resolve import Unresolved, resolve_date, resolve_employee
 from shiftopt.validator import validate
 
 
@@ -166,16 +172,46 @@ def _cmd_log(a) -> int:
         return 0
     for e in entries:
         replaced = f" (replaced {e['replaced_version']})" if e["replaced_version"] else ""
-        cost = e["details"].get("total_cost")
-        extra = "" if cost is None else f"  cost {cost:,.2f}, shortage {e['details'].get('total_shortage_slots')}"
+        d = e["details"]
+        cost = d.get("total_cost")
+        extra = "" if cost is None else f"  cost {cost:,.2f}, shortage {d.get('total_shortage_slots')}"
+        if d.get("employee_id"):
+            extra = f"  {d['employee_id']} {d['date']} {d.get('shift_id', '')}"
         print(f"{e['entry_id']}  {e['at']:%Y-%m-%d %H:%M:%S}  {e['action']:<9} {e['schedule_version']}{replaced}"
               f"  {e['run_id'] or ''}{extra}")
+    return 0
+
+
+def _cmd_lock(a) -> int:
+    store = Store(a.db)
+    active = store.active_schedule_version()
+    if active is None:
+        print("REFUSED  NOT_FOUND: there is no active schedule yet; approve a draft first.")
+        return 1
+    data = store.load_input(store.schedule_version_info(active)["input_version"])
+    locked = a.cmd == "lock"
+    try:
+        out = set_lock(store, resolve_employee(data, a.employee), resolve_date(data, a.date), locked)
+    except Unresolved as e:
+        print(f"REFUSED  {e.code}: {e.message}")
+        if e.candidates:
+            print("  choices: " + ", ".join(e.candidates))
+        return 1
+    except LockRefused as e:
+        print(f"REFUSED  {e.code}: {e.message}")
+        return 1
+    state = "locked" if out.is_locked else "unlocked"
+    note = "" if out.changed else f" (already {state}; nothing recorded)"
+    print(f"OK  {out.employee_id} {out.date.isoformat()} {out.shift_id} {out.start}-{out.end} in "
+          f"{out.schedule_version} is {state}{note}")
     return 0
 
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="shiftopt")
     p.add_argument("--db", default="shiftopt.db", help="SQLite file or SQLAlchemy URL (default shiftopt.db)")
+    p.add_argument("--now", default=None, help="fixed current time, e.g. 2026-11-03T07:00 (env SHIFTOPT_NOW; "
+                                               "default: the computer's clock)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     pi = sub.add_parser("import", help="validate an input workbook and store it as the active input version")
@@ -215,10 +251,25 @@ def main(argv=None) -> int:
     pl.add_argument("--limit", type=int, default=20)
     pl.set_defaults(fn=_cmd_log)
 
+    for name in ("lock", "unlock"):
+        pk = sub.add_parser(name, help=f"{name} a future shift of the active schedule")
+        pk.add_argument("employee", help="employee ID or name")
+        pk.add_argument("date", help="date (2026-11-04) or day name in the planning week")
+        pk.set_defaults(fn=_cmd_lock)
+
     a = p.parse_args(argv)
     if a.cmd == "solve" and a.time_budget <= 0:
         p.error("--time-budget must be positive")
-    return a.fn(a)
+    if a.now:
+        try:
+            clock.set_now(a.now)
+        except ValueError as e:
+            p.error(str(e))
+    try:
+        return a.fn(a)
+    finally:
+        if a.now:
+            clock.set_now(None)   # a fixed time applies to this command only
 
 
 if __name__ == "__main__":

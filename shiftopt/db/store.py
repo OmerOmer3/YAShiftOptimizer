@@ -1,8 +1,9 @@
 """Persistence (SCRUM-21, SCRUM-22, SCRUM-23).
 
 Spec section 4: the database stores employees, demand, templates, break rules, runs,
-versions, locks and absences. This module covers the first six; locks, absences and
-the audit log arrive with sprints 3-4.
+versions, locks and absences. Locks are the is_locked flag of an assignment (SCRUM-39):
+a lock is set on the active schedule's shift, and every lock and unlock is recorded in
+the audit log. Absences arrive with SCRUM-40.
 
   input_versions      one row per successful import; exactly one is active
   employees, demand_hours, shift_templates, break_rules
@@ -149,7 +150,7 @@ class ScheduleVersionRow(Base):
 
 class AuditLogRow(Base):
     """One recorded change to the schedule (SCRUM-24). Written in the same transaction as
-    the change itself. Actions: APPROVED now; LOCKED, UNLOCKED, ABSENCE_REPORTED in sprint 4."""
+    the change itself. Actions: APPROVED, LOCKED, UNLOCKED (SCRUM-39); ABSENCE_REPORTED (SCRUM-40)."""
     __tablename__ = "audit_log"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     at: Mapped[dt.datetime] = mapped_column(DateTime)
@@ -443,6 +444,25 @@ class Store:
                      "input_version": None if r.input_version_id is None else _code("IN", r.input_version_id),
                      "run_id": None if r.run_id is None else _code("RUN", r.run_id),
                      "details": json.loads(r.details or "{}")} for r in s.scalars(q)]
+
+    def set_lock(self, version: str, employee_id: str, date: dt.date, locked: bool) -> str:
+        """Lock or unlock one shift of the active schedule and record it in the audit log,
+        in one transaction (SCRUM-39). The caller has checked that the shift exists and has
+        not started; here it is confirmed that `version` is still the active schedule.
+        Raises StaleState("ACTIVE_CHANGED") or LookupError. Returns the shift ID."""
+        with Session(self.engine) as s, s.begin():
+            sv = s.scalars(select(ScheduleVersionRow).where(ScheduleVersionRow.is_active)).first()
+            if sv is None or sv.id != _num(version):
+                raise StaleState("ACTIVE_CHANGED")
+            row = s.get(AssignmentRow, (sv.id, employee_id, date))
+            if row is None:
+                raise LookupError(f"{employee_id} has no shift on {date.isoformat()} in {version}")
+            row.is_locked = locked
+            s.add(AuditLogRow(at=dt.datetime.now(), action="LOCKED" if locked else "UNLOCKED",
+                              schedule_version_id=sv.id, input_version_id=sv.input_version_id,
+                              details=json.dumps({"employee_id": employee_id, "date": date.isoformat(),
+                                                  "shift_id": row.shift_id})))
+            return row.shift_id
 
     def active_schedule_version(self) -> str | None:
         """The approved, active schedule. Only approve() changes it (SCRUM-37)."""
