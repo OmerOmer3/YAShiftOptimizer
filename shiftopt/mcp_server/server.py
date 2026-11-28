@@ -11,7 +11,8 @@ Run it for a chat client over stdio:
 
 Tools are added per story: status and export (SCRUM-32/44); import, solve and run status
 (SCRUM-33); resolving employees, dates and drafts (SCRUM-36);
-employee and coverage queries (SCRUM-34/35); approval (SCRUM-37); the change log (SCRUM-24).
+employee and coverage queries (SCRUM-34/35); approval (SCRUM-37); the change log (SCRUM-24);
+locking and unlocking a future shift (SCRUM-39).
 """
 from __future__ import annotations
 
@@ -27,7 +28,9 @@ from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
+from shiftopt import clock
 from shiftopt.db import Store
+from shiftopt.domain import DAY_NAMES, day_of_week
 from shiftopt.engine.solver import DEFAULT_SEED, DEFAULT_WORKERS
 from shiftopt.export import ExportError, export_run, resolve_run
 from shiftopt.ingest import import_workbook, read_input
@@ -42,6 +45,7 @@ from shiftopt.mcp_server.models import (
     ExportResult,
     ImportResult,
     InputIssueOut,
+    LockResult,
     ResolveResult,
     RunResult,
     ShiftOut,
@@ -51,6 +55,7 @@ from shiftopt.mcp_server.models import (
 )
 from shiftopt.service import NoActiveInput, run_initial
 from shiftopt.service.approve import ApprovalRefused, approve_draft as approve_service
+from shiftopt.service.locks import LockRefused, set_lock
 from shiftopt.service.queries import get_coverage as coverage_service
 from shiftopt.service.queries import get_employee as employee_service
 from shiftopt.service.resolve import Unresolved, date_label, resolve_date, resolve_draft, resolve_employee
@@ -69,6 +74,8 @@ Rules for the assistant:
   only source. If no tool answers a question, say that this is not available yet instead of looking elsewhere.
 - Creating a schedule makes a DRAFT. Nothing becomes the active schedule until the manager explicitly approves it.
   Call approve_draft only when the manager has clearly asked to approve that draft; never on your own initiative.
+- Lock or unlock a shift only when the manager asks to. Locks belong to shifts of the active (approved) schedule
+  that have not started; a locked shift is kept as it is by every later repair.
 - An empty value means 'not available', not zero; say so instead of reporting 0.
 """
 
@@ -76,6 +83,8 @@ READ_ONLY = ToolAnnotations(readOnlyHint=True, idempotentHint=True, openWorldHin
 WRITES_FILE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False)
 CREATES = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False)
 # Approval replaces the active schedule (the old one is kept in history): flagged so clients confirm.
+# Locking changes a flag on the active schedule and is recorded; doing it twice changes nothing more.
+CHANGES_LOCK = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False)
 CHANGES_ACTIVE = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False)
 
 
@@ -89,7 +98,7 @@ def _safe_file_name(name: str) -> str | None:
 
 def build_server(store: Store, *, export_dir: str | Path = "exports") -> MCPServer:
     export_dir = Path(export_dir).resolve()
-    mcp = MCPServer("YAShiftOptimizer", instructions=INSTRUCTIONS, version="0.3.0")
+    mcp = MCPServer("YAShiftOptimizer", instructions=INSTRUCTIONS, version="0.4.0")
 
     @mcp.tool(annotations=READ_ONLY)
     def get_system_status() -> SystemStatus:
@@ -97,7 +106,8 @@ def build_server(store: Store, *, export_dir: str | Path = "exports") -> MCPServ
         how many runs exist and a summary of the latest run. Call this first when the
         manager asks a general question or refers to 'the draft' or 'the last run'."""
         runs = store.list_runs()
-        return SystemStatus(active_input_version=store.active_input_version(),
+        return SystemStatus(now=clock.now().isoformat(timespec="minutes"),
+                            active_input_version=store.active_input_version(),
                             active_schedule_version=store.active_schedule_version(),
                             run_count=len(runs), latest_run=brief(runs[-1]) if runs else None)
 
@@ -244,7 +254,8 @@ def build_server(store: Store, *, export_dir: str | Path = "exports") -> MCPServ
     def list_changes(limit: Annotated[int, Field(ge=1, le=200)] = 20,
                      schedule_version: str | None = None) -> AuditResult:
         """The record of changes to the schedule, newest first: each approval with its time,
-        the version approved and the version it replaced (later also locks and absences).
+        the version approved and the version it replaced, and each lock and unlock with the
+        employee and date (absences from sprint 4).
         Optionally only the entries that affected one schedule version (SV-0003 or RUN-0003)."""
         version = None
         if schedule_version:
@@ -256,7 +267,9 @@ def build_server(store: Store, *, export_dir: str | Path = "exports") -> MCPServ
                               schedule_version=e["schedule_version"], replaced_version=e["replaced_version"],
                               input_version=e["input_version"], run_id=e["run_id"],
                               total_cost=e["details"].get("total_cost"),
-                              total_shortage_slots=e["details"].get("total_shortage_slots"))
+                              total_shortage_slots=e["details"].get("total_shortage_slots"),
+                              employee_id=e["details"].get("employee_id"), date=e["details"].get("date"),
+                              shift_id=e["details"].get("shift_id"))
                    for e in store.list_audit(limit=limit, schedule_version=version)]
         return AuditResult(entries=entries)
 
@@ -315,6 +328,40 @@ def build_server(store: Store, *, export_dir: str | Path = "exports") -> MCPServ
                                      end=x.end, breaks=x.breaks, paid_hours=x.paid_hours, cost=x.cost,
                                      is_locked=x.is_locked) for x in r.shifts])
 
+    def _lock(employee: str, date: str, locked: bool) -> LockResult:
+        active = store.active_schedule_version()
+        if active is None:
+            return LockResult.fail("NOT_FOUND", "There is no active schedule yet. Locks apply to the approved "
+                                                "schedule; approve a draft first.")
+        data = store.load_input(store.schedule_version_info(active)["input_version"])
+        try:
+            eid = resolve_employee(data, employee)
+            d = resolve_date(data, date)
+            out = set_lock(store, eid, d, locked)
+        except Unresolved as e:
+            return LockResult.fail(e.code, e.message, candidates=e.candidates, schedule_version=active)
+        except LockRefused as e:
+            return LockResult.fail(e.code, e.message, schedule_version=active)
+        return LockResult(schedule_version=out.schedule_version, employee_id=eid, name=data.employees[eid].name,
+                          date=d.isoformat(), weekday=DAY_NAMES.get(day_of_week(d)), shift_id=out.shift_id,
+                          start=out.start, end=out.end, is_locked=out.is_locked, changed=out.changed,
+                          now=out.now.isoformat(timespec="minutes"))
+
+    @mcp.tool(annotations=CHANGES_LOCK)
+    def lock_shift(employee: str, date: str) -> LockResult:
+        """Lock one shift of the active (approved) schedule so that later repairs keep it exactly as
+        it is, breaks included. Only when the manager asks to lock it. employee: an ID or a name;
+        date: a date or a day name in the planning week; both resolved by the server (AMBIGUOUS
+        or NOT_FOUND come with candidates: ask which). Refused with SHIFT_STARTED if the shift
+        has already started. Recorded in the change log; no new schedule version is created."""
+        return _lock(employee, date, True)
+
+    @mcp.tool(annotations=CHANGES_LOCK)
+    def unlock_shift(employee: str, date: str) -> LockResult:
+        """Remove the lock from one shift of the active schedule, so that a later repair may change
+        it. Only when the manager asks to unlock it. Same parameters and checks as lock_shift."""
+        return _lock(employee, date, False)
+
     return mcp
 
 
@@ -324,7 +371,12 @@ def main(argv=None) -> None:
                    help="SQLite file or SQLAlchemy URL (env SHIFTOPT_DB; default shiftopt.db)")
     p.add_argument("--export-dir", default=os.environ.get("SHIFTOPT_EXPORT_DIR", "exports"),
                    help="folder for exported workbooks (env SHIFTOPT_EXPORT_DIR; default exports)")
+    p.add_argument("--now", default=None,
+                   help="fixed current time for demos, e.g. 2026-11-03T07:00 (env SHIFTOPT_NOW; "
+                        "default: the computer's clock)")
     a = p.parse_args(argv)
+    if a.now:
+        clock.set_now(a.now)
     build_server(Store(a.db), export_dir=a.export_dir).run("stdio")
 
 

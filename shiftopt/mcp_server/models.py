@@ -26,6 +26,8 @@ ErrorCode = Literal[
     "VALIDATION_FAILED",    # the independent checker rejected the schedule
     "ALREADY_APPROVED",     # approval refused: the version is not a draft
     "CONFLICT",             # the active schedule changed while approving; nothing was changed
+    "SHIFT_STARTED",        # the shift has started or ended; it can no longer be locked or changed (SCRUM-39)
+    "LOCK_VIOLATED",        # approval refused: a repair draft changes a locked shift (SCRUM-39)
     "INTERNAL_ERROR",
 ]
 
@@ -69,6 +71,8 @@ class RunBrief(BaseModel):
 
 
 class SystemStatus(ToolResult):
+    now: str | None = Field(None, description="The current time the server uses to decide which shifts have "
+                                              "started (ISO); fixed for demos, otherwise the computer's clock")
     active_input_version: str | None = None
     active_schedule_version: str | None = Field(None, description="The approved schedule in force, if any")
     run_count: int = 0
@@ -140,13 +144,16 @@ class ApprovalResult(ToolResult):
 class AuditEntry(BaseModel):
     entry_id: str
     at: str = Field(description="ISO time of the change")
-    action: str = Field(description="APPROVED; in sprint 4 also LOCKED, UNLOCKED, ABSENCE_REPORTED")
+    action: str = Field(description="APPROVED, LOCKED or UNLOCKED; ABSENCE_REPORTED from SCRUM-40")
     schedule_version: str = Field(description="The schedule version the change affected")
     replaced_version: str | None = Field(description="For APPROVED: the schedule that was active before")
     input_version: str | None
     run_id: str | None
     total_cost: float | None = None
     total_shortage_slots: int | None = None
+    employee_id: str | None = Field(None, description="For LOCKED and UNLOCKED: whose shift")
+    date: str | None = Field(None, description="For LOCKED and UNLOCKED: the date of the shift")
+    shift_id: str | None = None
 
 
 class AuditResult(ToolResult):
@@ -226,3 +233,17 @@ class EmployeeResult(ToolResult):
     min_shifts_exempt: bool | None = None
     unavailable_dates: list[str] = Field(default_factory=list, description="From the input")
     shifts: list[EmployeeShiftOut] = Field(default_factory=list)
+
+
+class LockResult(ToolResult):
+    schedule_version: str | None = Field(None, description="The active schedule the lock belongs to")
+    employee_id: str | None = None
+    name: str | None = None
+    date: str | None = None
+    weekday: str | None = None
+    shift_id: str | None = None
+    start: str | None = None
+    end: str | None = None
+    is_locked: bool | None = Field(None, description="The shift's lock state after this call")
+    changed: bool | None = Field(None, description="False if the shift already had this state (nothing recorded)")
+    now: str | None = Field(None, description="The time used to check that the shift has not started")
